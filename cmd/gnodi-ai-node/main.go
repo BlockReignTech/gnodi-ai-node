@@ -1,6 +1,7 @@
 // Command gnodi-ai-node is the operator daemon for the Gnodi AI Node Network.
-// It serves an OpenAI-compatible inference endpoint backed by a local engine
-// (Ollama/vLLM), registers with NodeSvc, reports its capabilities, and heartbeats.
+// It dials the gateway, serves inference jobs pushed down that socket from a
+// local engine (Ollama/vLLM), registers and heartbeats with NodeSvc, and
+// exposes a loopback status page. It listens for no inbound traffic.
 package main
 
 import (
@@ -23,7 +24,11 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := daemon.New(cfg).Run(ctx); err != nil {
+	d, err := daemon.New(cfg)
+	if err != nil {
+		log.Fatalf("startup error: %v", err)
+	}
+	if err := d.Run(ctx); err != nil {
 		log.Fatalf("daemon exited with error: %v", err)
 	}
 }
