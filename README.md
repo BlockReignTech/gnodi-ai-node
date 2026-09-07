@@ -26,18 +26,28 @@ On start it:
    Routing liveness comes from the socket itself, not from this poll.
 5. Exposes a **loopback status page** on `STATUS_ADDR`.
 
-## Build & run
+## Install
+
+```bash
+curl -fsSL https://get.gnodi-ai.com | LICENSE_KEY=ABCD-EFGH-IJKL-MNOP sh
+```
+
+Downloads the binary, verifies it against the published `SHA256SUMS`, writes a
+`0600` config, and installs a service (systemd on Linux, launchd on macOS).
+Re-running upgrades the binary and **leaves your config alone**. Then open the
+dashboard at <http://127.0.0.1:8080>.
+
+## Build & run from source
 
 ```bash
 make build           # ./bin/gnodi-ai-node
 make test            # unit + integration tests (no external services needed)
-make build-linux     # static linux/amd64 + linux/arm64 binaries in ./bin
+make release         # static binaries for 4 platforms + SHA256SUMS in ./dist
 
 LICENSE_KEY=ABCD-EFGH-IJKL-MNOP \
 GATEWAY_URL=wss://gw.gnodi-ai.com/v1/agent \
 NODESVC_URL=https://nodes.gnodi.example \
 INFERENCE_URL=http://localhost:11434/v1 \
-MODELS=llama2-13b,mistral-7b \
 ./bin/gnodi-ai-node
 ```
 
@@ -52,7 +62,12 @@ With Ollama: `ollama serve` (OpenAI-compatible API at `http://localhost:11434/v1
 | `GATEWAY_URL` | ✓ | — | Agent socket, `ws://` or `wss://` |
 | `NODESVC_URL` | ✓ | — | NodeSvc base (serves `/nodes/*`) |
 | `INFERENCE_URL` | ✓ | — | OpenAI-compatible backend base |
-| `MODELS` | ✓ | — | CSV of served models (allowlist + advertised) |
+| `MODELS` | | — | Optional allowlist of catalog ids. Empty serves everything the card holds. **Required only with `MANIFEST_DISABLED=true`** |
+| `VRAM_GB` | | auto | Card size. Auto-detected via `nvidia-smi`; set it if detection fails |
+| `AUTO_PULL` | | `true` | Download catalog models this machine can run |
+| `MANIFEST_URL` | | derived | Signed catalog endpoint; derived from `GATEWAY_URL` |
+| `MANIFEST_PUBKEY` | | pinned | Key the catalog is verified against |
+| `OLLAMA_URL` | | derived | Engine management API; `INFERENCE_URL` minus `/v1` |
 | `MAX_CONCURRENCY` | | `1` | Jobs served at once; the gateway never exceeds it |
 | `STATE_DIR` | | `~/.gnodi-ai-node` | Holds the device key (created `0700`) |
 | `STATUS_ADDR` | | `127.0.0.1:8080` | Local status page. Loopback by design |
@@ -65,6 +80,36 @@ With Ollama: `ollama serve` (OpenAI-compatible API at `http://localhost:11434/v1
 > to advertise. Setting it is now a **startup error** rather than a silently
 > ignored variable — someone who still has it configured has a stale mental
 > model and would otherwise sit waiting for traffic that was never coming.
+
+## Models come from the signed catalog
+
+The network publishes a catalog pinning each model id to an exact engine
+reference **and content digest**. On start the node fetches it, verifies the
+signature against a **pinned** public key, picks everything its card can hold,
+pulls what is missing, and checks each digest.
+
+```
+gnodi/qwen2.5-32b   →   qwen2.5:32b-instruct-q4_K_M   (sha256:733884d6…)
+```
+
+The gateway routes on the network id; the node translates to the engine's own
+reference. That is what makes `gnodi/llama3.1-8b` mean identical weights on every
+node — otherwise two nodes serve the same name at different quantizations for the
+same price, and the router cannot tell them apart.
+
+Three consequences worth knowing:
+
+- **The public key is pinned in the binary, not fetched.** A compromised gateway
+  cannot tell the fleet which weights to download. Production builds override it
+  with `-ldflags` (see `make release`) or `MANIFEST_PUBKEY`.
+- **A digest mismatch means the model is not served.** If your local copy differs
+  from the pinned one, the node logs `REFUSING` and drops that id rather than
+  serving weights the network did not publish under it.
+- **Nothing is advertised before it is verified.** The sync runs before the socket
+  opens, so the gateway never routes work here that is certain to fail — which
+  would cost you success rate for nothing.
+
+Set `MANIFEST_DISABLED=true` to go back to a hand-written `MODELS` list.
 
 ## The device key
 
@@ -95,11 +140,19 @@ cmd/gnodi-ai-node/   entrypoint (config → daemon.Run)
 internal/config/     env config + validation
 internal/identity/   Ed25519 device key
 internal/agent/      gateway socket: handshake, job lifecycle, reconnect
-internal/inference/  OpenAI-compatible backend client (streaming) + allowlist
+internal/manifest/   signed catalog: verify, select by VRAM, pull, check digests
+internal/inference/  OpenAI-compatible backend client (streaming) + id→ref map
 internal/nodesvc/    NodeSvc client: activate, capabilities, heartbeat
 internal/chain/      optional CometBFT /status + /net_info metrics
-internal/daemon/     lifecycle orchestration + loopback status page
+internal/daemon/     lifecycle orchestration + loopback dashboard
+install/             one-line installer + service units
 ```
+
+## Dashboard
+
+`http://127.0.0.1:8080` shows connection state, models served with their pinned
+refs, jobs in flight, VRAM, and the device public key. Loopback only — it is for
+the operator, not the network.
 
 ## Notes / TODO
 
@@ -107,8 +160,8 @@ internal/daemon/     lifecycle orchestration + loopback status page
   dependencies, so the binary stays static and cross-compiles trivially. Hand
   rolling WebSocket framing, masking and the close handshake was not worth the
   risk of getting it subtly wrong.
-- **Model management is manual.** ADR-002 phase 3 adds the signed manifest, so
-  `MODELS` will be derived from what the node can actually run rather than
-  asserted by the operator.
+- **macOS VRAM is not auto-detected.** Detection uses `nvidia-smi`; on Apple
+  silicon set `VRAM_GB` by hand. The node says so rather than guessing, because a
+  wrong guess either wastes the machine or fails every job with an OOM.
 - Verification of correct model execution is a network-level concern (a future
   ADR), not the daemon's responsibility.

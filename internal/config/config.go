@@ -39,9 +39,51 @@ type Config struct {
 	HeartbeatInterval time.Duration
 	// ChainRPC is an optional CometBFT RPC base for block-height metrics.
 	ChainRPC string
-	// Engine and VramGb are advertised capability hints (optional).
+	// Engine and VramGb are advertised capability hints. VramGb is auto-detected
+	// when unset and a supported GPU tool is present.
 	Engine string
 	VramGb int
+
+	// ManifestURL is the signed catalog endpoint. Derived from GatewayURL when
+	// unset; empty disables manifest mode.
+	ManifestURL string
+	// ManifestPubKey is the base64 Ed25519 key the catalog is verified against.
+	// Pinned here rather than fetched: a compromised gateway must not be able to
+	// tell the fleet which weights to download.
+	ManifestPubKey string
+	// OllamaURL is the engine's management API (pull/list), distinct from the
+	// OpenAI-compatible surface at InferenceURL.
+	OllamaURL string
+	// AutoPull downloads catalog models this machine can run.
+	AutoPull bool
+}
+
+// ManifestEnabled reports whether the node manages models from the signed
+// catalog rather than from a hand-written MODELS list.
+func (c Config) ManifestEnabled() bool {
+	return c.ManifestURL != "" && c.ManifestPubKey != ""
+}
+
+// DefaultManifestPubKey is the development signing key. Production builds
+// override it with -ldflags or MANIFEST_PUBKEY.
+var DefaultManifestPubKey = "7PwlrpJ6r1fYU3pecTi5hj3rpzQKcJM0T9/FYsz/kjQ="
+
+// manifestURLFrom derives the catalog endpoint from the agent socket URL:
+// wss://host/v1/agent -> https://host/v1/manifest.
+func manifestURLFrom(gatewayURL string) string {
+	if gatewayURL == "" {
+		return ""
+	}
+	u := strings.TrimSuffix(gatewayURL, "/v1/agent")
+	switch {
+	case strings.HasPrefix(u, "wss://"):
+		u = "https://" + strings.TrimPrefix(u, "wss://")
+	case strings.HasPrefix(u, "ws://"):
+		u = "http://" + strings.TrimPrefix(u, "ws://")
+	default:
+		return ""
+	}
+	return u + "/v1/manifest"
 }
 
 // Load reads configuration from the environment and validates it.
@@ -59,8 +101,15 @@ func Load() (Config, error) {
 		ChainRPC:          trimURL(os.Getenv("CHAIN_RPC")),
 		Engine:            getenv("ENGINE", "ollama"),
 		VramGb:            atoiDefault(os.Getenv("VRAM_GB"), 0),
+		ManifestPubKey:    getenv("MANIFEST_PUBKEY", DefaultManifestPubKey),
+		AutoPull:          boolDefault(os.Getenv("AUTO_PULL"), true),
 		HeartbeatInterval: 5 * time.Minute,
 	}
+	c.ManifestURL = getenv("MANIFEST_URL", manifestURLFrom(c.GatewayURL))
+	if os.Getenv("MANIFEST_DISABLED") == "true" {
+		c.ManifestURL = ""
+	}
+	c.OllamaURL = getenv("OLLAMA_URL", strings.TrimSuffix(c.InferenceURL, "/v1"))
 	if v := os.Getenv("HEARTBEAT_INTERVAL"); v != "" {
 		d, err := time.ParseDuration(v)
 		if err != nil {
@@ -88,8 +137,10 @@ func (c Config) Validate() error {
 	if c.InferenceURL == "" {
 		problems = append(problems, "INFERENCE_URL is required")
 	}
-	if len(c.Models) == 0 {
-		problems = append(problems, "MODELS is required")
+	// With the signed catalog on, MODELS is an optional allowlist: the node
+	// serves whatever its card can hold unless the operator narrows it.
+	if len(c.Models) == 0 && !c.ManifestEnabled() {
+		problems = append(problems, "MODELS is required when the model manifest is disabled")
 	}
 	if c.MaxConcurrency < 1 {
 		problems = append(problems, "MAX_CONCURRENCY must be at least 1")
@@ -131,6 +182,21 @@ func getenv(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// boolDefault parses an env flag, falling back to def for anything unset or
+// unrecognised.
+func boolDefault(s string, def bool) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "":
+		return def
+	case "false", "0", "no", "off":
+		return false
+	case "true", "1", "yes", "on":
+		return true
+	default:
+		return def
+	}
 }
 
 func atoiDefault(s string, def int) int {

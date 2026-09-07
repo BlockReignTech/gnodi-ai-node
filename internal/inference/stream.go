@@ -28,7 +28,10 @@ type Result struct {
 var ErrModelNotServed = fmt.Errorf("model not served by this node")
 
 // Serves reports whether this node advertises `model`.
-func (p *Proxy) Serves(model string) bool { return p.allowed[model] }
+func (p *Proxy) Serves(model string) bool {
+	_, ok := p.ref(model)
+	return ok
+}
 
 // Stream runs a chat completion against the local backend and calls onDelta for
 // each token chunk as it arrives.
@@ -44,7 +47,9 @@ func (p *Proxy) Stream(
 	onDelta func(string) error,
 ) (Result, error) {
 	var out Result
-	if !p.allowed[model] {
+	// The gateway asks for a network id; the engine wants its own reference.
+	engineRef, ok := p.ref(model)
+	if !ok {
 		return out, ErrModelNotServed
 	}
 	if len(messages) == 0 {
@@ -55,7 +60,7 @@ func (p *Proxy) Stream(
 	}
 
 	payload, err := json.Marshal(map[string]any{
-		"model":      model,
+		"model":      engineRef,
 		"messages":   messages,
 		"max_tokens": maxTokens,
 		"stream":     true,

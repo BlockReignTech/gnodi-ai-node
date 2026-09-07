@@ -9,34 +9,64 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"sort"
+	"sync"
 )
 
 // Proxy forwards chat-completion requests to an OpenAI-compatible backend.
+//
+// It holds a catalog mapping the network's model ids to engine references: the
+// gateway routes on `gnodi/llama3.1-8b`, while Ollama knows the same weights as
+// `llama3.1:8b-instruct-q4_K_M`. Translating here keeps the engine's naming out
+// of the protocol.
 type Proxy struct {
 	backendURL string // POSTs to backendURL + "/chat/completions"
-	allowed    map[string]bool
+	mu         sync.RWMutex
+	catalog    map[string]string // model id -> engine ref
 	http       *http.Client
 }
 
-// NewProxy builds a proxy serving exactly `models`. If hc is nil, a default
-// client is used.
+// NewProxy builds a proxy serving exactly `models`, where each id is also its
+// engine reference. The manifest replaces this mapping via SetCatalog.
 func NewProxy(backendURL string, models []string, hc *http.Client) *Proxy {
 	if hc == nil {
 		hc = http.DefaultClient
 	}
-	allow := make(map[string]bool, len(models))
+	catalog := make(map[string]string, len(models))
 	for _, m := range models {
-		allow[m] = true
+		catalog[m] = m
 	}
-	return &Proxy{backendURL: backendURL, allowed: allow, http: hc}
+	return &Proxy{backendURL: backendURL, catalog: catalog, http: hc}
 }
 
-// Models returns the served model list.
+// SetCatalog replaces the served models. Safe to call while jobs are running.
+func (p *Proxy) SetCatalog(catalog map[string]string) {
+	next := make(map[string]string, len(catalog))
+	for id, ref := range catalog {
+		next[id] = ref
+	}
+	p.mu.Lock()
+	p.catalog = next
+	p.mu.Unlock()
+}
+
+// ref resolves a network model id to its engine reference.
+func (p *Proxy) ref(id string) (string, bool) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	r, ok := p.catalog[id]
+	return r, ok
+}
+
+// Models returns the served model ids, sorted for stable reporting.
 func (p *Proxy) Models() []string {
-	out := make([]string, 0, len(p.allowed))
-	for m := range p.allowed {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	out := make([]string, 0, len(p.catalog))
+	for m := range p.catalog {
 		out = append(out, m)
 	}
+	sort.Strings(out)
 	return out
 }
 
@@ -57,7 +87,7 @@ func (p *Proxy) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "request must include a JSON \"model\" field")
 		return
 	}
-	if !p.allowed[probe.Model] {
+	if _, ok := p.ref(probe.Model); !ok {
 		writeError(w, http.StatusNotFound, "model not served by this node: "+probe.Model)
 		return
 	}

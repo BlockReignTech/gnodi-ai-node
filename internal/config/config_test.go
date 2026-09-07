@@ -120,3 +120,79 @@ func TestLoad_HeartbeatOverride(t *testing.T) {
 		t.Errorf("got %v", c.HeartbeatInterval)
 	}
 }
+
+func TestLoad_ManifestModeMakesModelsOptional(t *testing.T) {
+	env := validEnv(t)
+	delete(env, "MODELS")
+	setenv(t, env)
+
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("MODELS should be optional under the manifest: %v", err)
+	}
+	if !c.ManifestEnabled() {
+		t.Fatal("manifest should be enabled by default")
+	}
+	if len(c.Models) != 0 {
+		t.Errorf("Models should be an empty allowlist, got %v", c.Models)
+	}
+}
+
+func TestLoad_ModelsRequiredWhenManifestDisabled(t *testing.T) {
+	env := validEnv(t)
+	delete(env, "MODELS")
+	setenv(t, env)
+	t.Setenv("MANIFEST_DISABLED", "true")
+
+	_, err := Load()
+	if err == nil || !strings.Contains(err.Error(), "MODELS") {
+		t.Fatalf("expected MODELS to be required with the manifest off, got %v", err)
+	}
+}
+
+func TestLoad_DerivesManifestAndOllamaURLs(t *testing.T) {
+	setenv(t, validEnv(t))
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// wss://host/v1/agent → https://host/v1/manifest
+	if c.ManifestURL != "https://gw.example.com/v1/manifest" {
+		t.Errorf("ManifestURL = %q", c.ManifestURL)
+	}
+	// The management API is the OpenAI base minus /v1.
+	if c.OllamaURL != "http://localhost:11434" {
+		t.Errorf("OllamaURL = %q", c.OllamaURL)
+	}
+	if c.ManifestPubKey != DefaultManifestPubKey || c.ManifestPubKey == "" {
+		t.Error("a manifest public key must be pinned by default")
+	}
+	if !c.AutoPull {
+		t.Error("AutoPull should default on")
+	}
+}
+
+func TestLoad_AutoPullCanBeDisabled(t *testing.T) {
+	setenv(t, validEnv(t))
+	t.Setenv("AUTO_PULL", "false")
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.AutoPull {
+		t.Error("AUTO_PULL=false should disable pulling")
+	}
+}
+
+func TestLoad_ExplicitManifestOverrides(t *testing.T) {
+	setenv(t, validEnv(t))
+	t.Setenv("MANIFEST_URL", "https://cdn.example.com/manifest.json")
+	t.Setenv("MANIFEST_PUBKEY", "AAAA")
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.ManifestURL != "https://cdn.example.com/manifest.json" || c.ManifestPubKey != "AAAA" {
+		t.Errorf("overrides ignored: %q %q", c.ManifestURL, c.ManifestPubKey)
+	}
+}

@@ -11,8 +11,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/blockreigntech/gnodi-ai-node/internal/agent"
@@ -20,18 +22,24 @@ import (
 	"github.com/blockreigntech/gnodi-ai-node/internal/config"
 	"github.com/blockreigntech/gnodi-ai-node/internal/identity"
 	"github.com/blockreigntech/gnodi-ai-node/internal/inference"
+	"github.com/blockreigntech/gnodi-ai-node/internal/manifest"
 	"github.com/blockreigntech/gnodi-ai-node/internal/nodesvc"
 )
 
 // Daemon ties together the gateway agent, the local inference backend, the
 // NodeSvc client, and the optional chain client.
 type Daemon struct {
-	cfg   config.Config
-	ns    *nodesvc.Client
-	proxy *inference.Proxy
-	chain *chain.Client // nil if ChainRPC not configured
-	key   *identity.Key
-	agent *agent.Client
+	cfg    config.Config
+	ns     *nodesvc.Client
+	proxy  *inference.Proxy
+	chain  *chain.Client // nil if ChainRPC not configured
+	key    *identity.Key
+	agent  *agent.Client
+	models *manifest.Manager // nil when the manifest is disabled
+
+	mu      sync.Mutex
+	catalog manifest.Catalog
+	version int
 }
 
 // New builds a Daemon, loading or creating the device key.
@@ -53,6 +61,19 @@ func New(cfg config.Config) (*Daemon, error) {
 	if cfg.ChainRPC != "" {
 		d.chain = chain.New(cfg.ChainRPC, &http.Client{Timeout: 10 * time.Second})
 	}
+	if cfg.ManifestEnabled() {
+		d.models = &manifest.Manager{
+			URL:       cfg.ManifestURL,
+			PublicKey: cfg.ManifestPubKey,
+			VramGb:    cfg.VramGb,
+			Allow:     cfg.Models, // optional operator narrowing
+			AutoPull:  cfg.AutoPull,
+			HTTP:      &http.Client{Timeout: 60 * time.Minute}, // pulls are large
+			Ollama:    manifest.NewOllama(cfg.OllamaURL, &http.Client{Timeout: 60 * time.Minute}),
+			Logger:    log.Default(),
+		}
+	}
+
 	d.agent = agent.New(agent.Config{
 		GatewayURL:     cfg.GatewayURL,
 		LicenseKey:     cfg.LicenseKey,
@@ -69,6 +90,7 @@ func New(cfg config.Config) (*Daemon, error) {
 // this node is doing and is not intended to face the network.
 func (d *Daemon) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /{$}", d.dashboard)
 	mux.HandleFunc("GET /health", d.health)
 	mux.HandleFunc("GET /status", d.status)
 	return mux
@@ -83,7 +105,7 @@ func (d *Daemon) Register(ctx context.Context) error {
 	if err := d.ns.Activate(ctx, d.cfg.NodeVersion); err != nil {
 		return err
 	}
-	return d.ns.ReportCapabilities(ctx, "", d.cfg.Models)
+	return d.ns.ReportCapabilities(ctx, "", d.proxy.Models())
 }
 
 // HeartbeatOnce sends a single NodeSvc heartbeat with best-effort chain metrics.
@@ -99,9 +121,50 @@ func (d *Daemon) HeartbeatOnce(ctx context.Context) error {
 	return d.ns.Heartbeat(ctx, d.cfg.NodeVersion, m)
 }
 
+// SyncModels fetches the signed catalog, pulls what this machine can run, and
+// points the inference proxy at the result.
+//
+// Runs before the node connects: advertising a model the engine cannot actually
+// serve would have the gateway route work here that is certain to fail, which
+// costs the operator their success rate for nothing.
+func (d *Daemon) SyncModels(ctx context.Context) error {
+	if d.models == nil {
+		return nil // manifest disabled; MODELS is authoritative
+	}
+	if d.models.VramGb <= 0 {
+		detected := manifest.DetectVramGb(ctx)
+		if detected <= 0 {
+			return fmt.Errorf(
+				"could not detect GPU memory; set VRAM_GB to the card's size in GB, " +
+					"or set MANIFEST_DISABLED=true and list MODELS by hand")
+		}
+		log.Printf("manifest: detected %dGB of VRAM", detected)
+		d.models.VramGb = detected
+	}
+
+	res, err := d.models.Sync(ctx)
+	if err != nil {
+		return err
+	}
+	for id, why := range res.Skipped {
+		log.Printf("manifest: skipping %s — %s", id, why)
+	}
+
+	d.proxy.SetCatalog(res.Catalog)
+	d.mu.Lock()
+	d.catalog, d.version = res.Catalog, res.Version
+	d.mu.Unlock()
+
+	d.agent.SetModels(d.proxy.Models())
+	return nil
+}
+
 // Run registers, starts the local status server and the NodeSvc heartbeat, and
 // serves gateway jobs until ctx is cancelled.
 func (d *Daemon) Run(ctx context.Context) error {
+	if err := d.SyncModels(ctx); err != nil {
+		return err
+	}
 	if err := d.Register(ctx); err != nil {
 		return err
 	}
@@ -161,19 +224,33 @@ func (d *Daemon) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, map[string]any{
 		"status":  "ok",
 		"version": d.cfg.NodeVersion,
-		"models":  d.cfg.Models,
+		"models":  d.proxy.Models(),
 	})
 }
 
 func (d *Daemon) status(w http.ResponseWriter, _ *http.Request) {
+	d.mu.Lock()
+	catalog, version := d.catalog, d.version
+	d.mu.Unlock()
+
 	writeJSON(w, map[string]any{
-		"version":        d.cfg.NodeVersion,
-		"gateway":        d.cfg.GatewayURL,
-		"models":         d.cfg.Models,
-		"maxConcurrency": d.cfg.MaxConcurrency,
-		"inFlight":       d.agent.InFlight(),
-		"devicePubkey":   d.key.PublicKeyBase64(),
+		"version":         d.cfg.NodeVersion,
+		"gateway":         d.cfg.GatewayURL,
+		"models":          d.proxy.Models(),
+		"catalog":         catalog,
+		"manifestVersion": version,
+		"vramGb":          d.modelsVram(),
+		"maxConcurrency":  d.cfg.MaxConcurrency,
+		"inFlight":        d.agent.InFlight(),
+		"devicePubkey":    d.key.PublicKeyBase64(),
 	})
+}
+
+func (d *Daemon) modelsVram() int {
+	if d.models != nil {
+		return d.models.VramGb
+	}
+	return d.cfg.VramGb
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

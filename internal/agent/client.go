@@ -72,6 +72,14 @@ func New(cfg Config, key *identity.Key, runner Runner, logger *log.Logger) *Clie
 	}
 }
 
+// SetModels replaces the advertised model list. Called after a manifest sync,
+// before the socket is opened.
+func (c *Client) SetModels(models []string) {
+	c.mu.Lock()
+	c.cfg.Models = models
+	c.mu.Unlock()
+}
+
 // Drain stops accepting new work while letting in-flight jobs finish, so an
 // operator can restart without failing live requests.
 func (c *Client) Drain() {
@@ -155,11 +163,15 @@ func (c *Client) runOnce(ctx context.Context) error {
 	}()
 
 	c.draining.Store(false)
+	c.mu.Lock()
+	models := append([]string(nil), c.cfg.Models...)
+	c.mu.Unlock()
+
 	c.send(capabilitiesFrame{
-		T: "capabilities", Models: c.cfg.Models, MaxConcurrency: c.cfg.MaxConcurrency,
+		T: "capabilities", Models: models, MaxConcurrency: c.cfg.MaxConcurrency,
 		Engine: c.cfg.Engine, VramGb: c.cfg.VramGb,
 	})
-	c.logger.Printf("agent: connected to %s serving %s", c.cfg.GatewayURL, strings.Join(c.cfg.Models, ", "))
+	c.logger.Printf("agent: connected to %s serving %s", c.cfg.GatewayURL, strings.Join(models, ", "))
 
 	err = c.readLoop(ctx, conn)
 
