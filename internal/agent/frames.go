@@ -22,6 +22,9 @@ type helloFrame struct {
 type readyFrame struct {
 	T      string `json:"t"`
 	NodeID string `json:"nodeId"`
+	// Operator is the EVM address this node's revenue settles to, from the
+	// licence record. The node cannot derive it, so the gateway supplies it.
+	Operator string `json:"operator"`
 }
 
 type offerFrame struct {

@@ -414,3 +414,41 @@ func TestAgent_DrainRejectsNewWork(t *testing.T) {
 		t.Fatal("timed out")
 	}
 }
+
+// The node cannot derive its own payout address; the gateway supplies it in the
+// handshake so the operator can see their earnings without being told it
+// out of band.
+func TestAgent_LearnsPayoutAddressFromHandshake(t *testing.T) {
+	const operator = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+	ready := make(chan struct{})
+
+	url := startGateway(t, func(g *gatewayConn) {
+		nonce := make([]byte, 32)
+		g.send(map[string]any{
+			"t": "hello", "protocol": ProtocolVersion,
+			"nonce": hex.EncodeToString(nonce), "heartbeatSec": 30,
+		})
+		g.readUntil("auth")
+		g.send(map[string]any{"t": "ready", "nodeId": testLicense, "operator": operator})
+		g.readUntil("capabilities")
+		close(ready)
+		<-g.ctx.Done()
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	c := newClient(t, url, &fakeRunner{models: []string{"m"}}, 1)
+	if got := c.Operator(); got != "" {
+		t.Errorf("operator should be empty before the handshake, got %q", got)
+	}
+	go func() { _ = c.runOnce(ctx) }()
+
+	select {
+	case <-ready:
+	case <-ctx.Done():
+		t.Fatal("timed out")
+	}
+	if got := c.Operator(); got != operator {
+		t.Errorf("Operator() = %q, want %q", got, operator)
+	}
+}

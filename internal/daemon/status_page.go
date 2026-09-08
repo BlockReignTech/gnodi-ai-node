@@ -64,6 +64,17 @@ const statusPage = `<!doctype html>
     <div class="tile"><div class="k">VRAM</div><div class="v" id="vram">–</div></div>
   </div>
 
+  <h2>Earnings</h2>
+  <div class="grid">
+    <div class="tile"><div class="k">Earned all time</div><div class="v" id="earned">–</div></div>
+    <div class="tile"><div class="k">Unclaimed</div><div class="v" id="unclaimed" style="color:var(--accent)">–</div></div>
+  </div>
+  <div class="box"><table>
+    <thead><tr><th>Epoch</th><th>Amount (aGNOD)</th><th>Status</th></tr></thead>
+    <tbody id="epochs"><tr><td colspan="3">loading…</td></tr></tbody>
+  </table></div>
+  <div class="sub" style="margin-top:10px" id="payout"></div>
+
   <h2>Models served</h2>
   <div class="box"><table>
     <thead><tr><th>Network id</th><th>Engine reference</th></tr></thead>
@@ -85,6 +96,49 @@ const statusPage = `<!doctype html>
 </div>
 <script>
 const $ = (id) => document.getElementById(id);
+
+/** aGNOD wei → a short decimal string. BigInt so large values stay exact. */
+function agnod(wei) {
+  const v = BigInt(wei || "0");
+  const whole = v / 10n ** 18n;
+  const frac = (v % 10n ** 18n).toString().padStart(18, "0").slice(0, 4);
+  return whole + "." + frac;
+}
+
+async function refreshEarnings() {
+  try {
+    const r = await fetch("/earnings", { cache: "no-store" });
+    const d = await r.json();
+
+    if (d.connected === false) {
+      $("payout").textContent = "Waiting for the gateway to report this node's payout address.";
+      return;
+    }
+    $("payout").textContent = d.operator ? "Payout address " + d.operator : "";
+    if (d.error) {
+      $("epochs").innerHTML = "<tr><td colspan=3>could not read claims — " + d.error + "</td></tr>";
+      return;
+    }
+
+    $("earned").textContent = agnod(d.totalWei);
+    $("unclaimed").textContent = agnod(d.unclaimedWei);
+
+    const rows = (d.claims || []).map((c) => {
+      // 'claimed' is deliberately tri-state: undefined means the chain could
+      // not be read, which is not the same as "not yet claimed".
+      const status = c.claimed === true ? "claimed"
+        : c.claimed === false ? "claimable"
+        : "unknown";
+      return "<tr><td>" + c.epoch + "</td><td>" + agnod(c.amountWei) +
+             "</td><td>" + status + "</td></tr>";
+    });
+    $("epochs").innerHTML = rows.length
+      ? rows.join("")
+      : "<tr><td colspan=3>no settled epochs yet</td></tr>";
+  } catch (e) {
+    $("epochs").innerHTML = "<tr><td colspan=3>earnings unavailable</td></tr>";
+  }
+}
 
 async function refresh() {
   try {
@@ -117,7 +171,10 @@ async function refresh() {
   }
 }
 refresh();
+refreshEarnings();
 setInterval(refresh, 3000);
+// Settlement happens once an epoch, so this needs nothing like the same cadence.
+setInterval(refreshEarnings, 60000);
 </script>
 </body>
 </html>

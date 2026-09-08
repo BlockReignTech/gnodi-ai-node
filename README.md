@@ -151,8 +151,14 @@ install/             one-line installer + service units
 ## Dashboard
 
 `http://127.0.0.1:8080` shows connection state, models served with their pinned
-refs, jobs in flight, VRAM, and the device public key. Loopback only — it is for
-the operator, not the network.
+refs, jobs in flight, VRAM, the device public key, and **earnings**. Loopback
+only — it is for the operator, not the network.
+
+Earnings come from the gateway: the handshake reports this node's payout address
+(the one piece of the settlement path a node cannot derive for itself), and the
+daemon proxies `/v1/claims/:operator` at `/earnings`. Each settled epoch shows as
+`claimed`, `claimable`, or `unknown` — the last meaning the chain could not be
+read, which is not the same as unclaimed.
 
 ## Notes / TODO
 

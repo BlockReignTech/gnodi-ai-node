@@ -52,6 +52,7 @@ type Client struct {
 	mu       sync.Mutex
 	jobs     map[string]context.CancelFunc
 	inFlight int
+	operator string
 }
 
 // New builds a client. maxConcurrency below 1 is treated as 1.
@@ -229,7 +230,18 @@ func (c *Client) handshake(ctx context.Context, conn *websocket.Conn) error {
 	if err := json.Unmarshal(raw, &ready); err != nil || ready.T != "ready" {
 		return fmt.Errorf("expected ready, got %q", truncate(raw))
 	}
+	c.mu.Lock()
+	c.operator = ready.Operator
+	c.mu.Unlock()
 	return nil
+}
+
+// Operator is the payout address the gateway reported, or "" before the first
+// successful handshake.
+func (c *Client) Operator() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.operator
 }
 
 func (c *Client) readLoop(ctx context.Context, conn *websocket.Conn) error {

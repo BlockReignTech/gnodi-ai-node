@@ -93,6 +93,7 @@ func (d *Daemon) Handler() http.Handler {
 	mux.HandleFunc("GET /{$}", d.dashboard)
 	mux.HandleFunc("GET /health", d.health)
 	mux.HandleFunc("GET /status", d.status)
+	mux.HandleFunc("GET /earnings", d.earnings)
 	return mux
 }
 
@@ -236,6 +237,7 @@ func (d *Daemon) status(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, map[string]any{
 		"version":         d.cfg.NodeVersion,
 		"gateway":         d.cfg.GatewayURL,
+		"operator":        d.agent.Operator(),
 		"models":          d.proxy.Models(),
 		"catalog":         catalog,
 		"manifestVersion": version,
@@ -244,6 +246,54 @@ func (d *Daemon) status(w http.ResponseWriter, _ *http.Request) {
 		"inFlight":        d.agent.InFlight(),
 		"devicePubkey":    d.key.PublicKeyBase64(),
 	})
+}
+
+// earnings proxies the operator's claim proofs from the gateway.
+//
+// Proxied rather than fetched by the dashboard directly so the page stays a
+// plain same-origin document — no CORS to configure, and nothing to break when
+// the gateway moves.
+func (d *Daemon) earnings(w http.ResponseWriter, r *http.Request) {
+	operator := d.agent.Operator()
+	if operator == "" {
+		// Before the first successful handshake the node does not know where
+		// its revenue settles, and saying so beats reporting zero earnings.
+		writeJSON(w, map[string]any{"connected": false})
+		return
+	}
+	if d.cfg.GatewayHTTPURL == "" {
+		writeJSON(w, map[string]any{"operator": operator, "error": "no gateway HTTP URL configured"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	url := d.cfg.GatewayHTTPURL + "/v1/claims/" + operator
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		writeJSON(w, map[string]any{"operator": operator, "error": err.Error()})
+		return
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		writeJSON(w, map[string]any{"operator": operator, "error": err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		writeJSON(w, map[string]any{
+			"operator": operator,
+			"error":    fmt.Sprintf("gateway returned %d", resp.StatusCode),
+		})
+		return
+	}
+
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		writeJSON(w, map[string]any{"operator": operator, "error": "unreadable response"})
+		return
+	}
+	writeJSON(w, body)
 }
 
 func (d *Daemon) modelsVram() int {

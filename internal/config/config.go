@@ -56,6 +56,8 @@ type Config struct {
 	OllamaURL string
 	// AutoPull downloads catalog models this machine can run.
 	AutoPull bool
+	// GatewayHTTPURL is the gateway's HTTP base, for reading claim proofs.
+	GatewayHTTPURL string
 }
 
 // ManifestEnabled reports whether the node manages models from the signed
@@ -68,22 +70,31 @@ func (c Config) ManifestEnabled() bool {
 // override it with -ldflags or MANIFEST_PUBKEY.
 var DefaultManifestPubKey = "7PwlrpJ6r1fYU3pecTi5hj3rpzQKcJM0T9/FYsz/kjQ="
 
-// manifestURLFrom derives the catalog endpoint from the agent socket URL:
-// wss://host/v1/agent -> https://host/v1/manifest.
-func manifestURLFrom(gatewayURL string) string {
+// gatewayHTTPFrom converts the agent socket URL to the gateway's HTTP base:
+// wss://host/v1/agent -> https://host.
+func gatewayHTTPFrom(gatewayURL string) string {
 	if gatewayURL == "" {
 		return ""
 	}
 	u := strings.TrimSuffix(gatewayURL, "/v1/agent")
 	switch {
 	case strings.HasPrefix(u, "wss://"):
-		u = "https://" + strings.TrimPrefix(u, "wss://")
+		return "https://" + strings.TrimPrefix(u, "wss://")
 	case strings.HasPrefix(u, "ws://"):
-		u = "http://" + strings.TrimPrefix(u, "ws://")
+		return "http://" + strings.TrimPrefix(u, "ws://")
 	default:
 		return ""
 	}
-	return u + "/v1/manifest"
+}
+
+// manifestURLFrom derives the catalog endpoint from the agent socket URL:
+// wss://host/v1/agent -> https://host/v1/manifest.
+func manifestURLFrom(gatewayURL string) string {
+	base := gatewayHTTPFrom(gatewayURL)
+	if base == "" {
+		return ""
+	}
+	return base + "/v1/manifest"
 }
 
 // Load reads configuration from the environment and validates it.
@@ -110,6 +121,7 @@ func Load() (Config, error) {
 		c.ManifestURL = ""
 	}
 	c.OllamaURL = getenv("OLLAMA_URL", strings.TrimSuffix(c.InferenceURL, "/v1"))
+	c.GatewayHTTPURL = getenv("GATEWAY_HTTP_URL", gatewayHTTPFrom(c.GatewayURL))
 	if v := os.Getenv("HEARTBEAT_INTERVAL"); v != "" {
 		d, err := time.ParseDuration(v)
 		if err != nil {

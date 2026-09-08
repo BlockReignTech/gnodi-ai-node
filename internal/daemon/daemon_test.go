@@ -144,3 +144,34 @@ func TestDaemon_DeviceKeyPersistsAcrossRestarts(t *testing.T) {
 		t.Error("device key changed across restarts; the gateway would reject it as a key mismatch")
 	}
 }
+
+// Before the handshake the node does not know where its revenue settles.
+// Saying so beats reporting zero earnings, which reads as "you earned nothing".
+func TestDaemon_EarningsBeforeConnecting(t *testing.T) {
+	ns, _ := fakeNodeSvc(t)
+	d, err := New(testConfig(t, ns.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	d.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/earnings", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("earnings: %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `"connected":false`) {
+		t.Errorf("expected connected:false, got %s", rec.Body.String())
+	}
+}
+
+func TestDaemon_StatusReportsPayoutAddress(t *testing.T) {
+	ns, _ := fakeNodeSvc(t)
+	d, err := New(testConfig(t, ns.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	d.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/status", nil))
+	if !strings.Contains(rec.Body.String(), `"operator"`) {
+		t.Errorf("status should carry the payout address field: %s", rec.Body.String())
+	}
+}
