@@ -66,9 +66,13 @@ func (c Config) ManifestEnabled() bool {
 	return c.ManifestURL != "" && c.ManifestPubKey != ""
 }
 
-// DefaultManifestPubKey is the development signing key. Production builds
-// override it with -ldflags or MANIFEST_PUBKEY.
-var DefaultManifestPubKey = "7PwlrpJ6r1fYU3pecTi5hj3rpzQKcJM0T9/FYsz/kjQ="
+// DefaultManifestPubKey is the network's manifest signing key, so a build from
+// source verifies against the same catalog a released binary does. Release
+// builds set it explicitly via -ldflags; MANIFEST_PUBKEY overrides both, which
+// is how a local catalog is tested.
+//
+// A public key, and safe in source. The private half never leaves the signer.
+var DefaultManifestPubKey = "5SP2p3zmdGvD523AtowmByyksBPPAB7308jUC6Zu16c="
 
 // gatewayHTTPFrom converts the agent socket URL to the gateway's HTTP base:
 // wss://host/v1/agent -> https://host.
