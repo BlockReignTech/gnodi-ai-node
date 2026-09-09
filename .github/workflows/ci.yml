@@ -1,0 +1,50 @@
+name: CI
+
+permissions: {}
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build and test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "gofmt needed on:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race ./...
+
+      # The installer is piped into sh on operator machines, so a syntax error
+      # would break every install. Cheap to check, expensive to miss.
+      - name: Check installer syntax
+        run: sh -n install/install.sh
+
+      # Proves the four platforms still cross-compile. The key here is a
+      # placeholder and the artifacts are discarded — shippable builds come from
+      # the release workflow, which uses the real key.
+      - name: Cross-compile
+        env:
+          MANIFEST_PUBKEY: ci-placeholder-not-a-real-key
+        run: make release

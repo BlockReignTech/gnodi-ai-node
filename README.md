@@ -4,11 +4,10 @@ The operator daemon for the **Gnodi AI Node Network**. A single static Go binary
 that **dials the gateway** and serves inference jobs pushed down that socket from
 a local engine (Ollama / vLLM).
 
-It listens for **no inbound traffic**. Per
-[ADR-002](../docs/ADR-002-node-software-and-consumer-surfaces.md) D-2 the node
-opens the connection, which is what lets a machine behind residential NAT or
-CGNAT serve traffic — no port forwarding, no DNS name, no TLS certificate — and
-which removes the unauthenticated public endpoint the previous design exposed.
+It listens for **no inbound traffic**. The node opens the connection, which is
+what lets a machine behind residential NAT or CGNAT serve traffic — no port
+forwarding, no DNS name, no TLS certificate — and which means there is no public
+endpoint to attack.
 
 ## What it does
 
@@ -17,7 +16,7 @@ On start it:
 1. **Activates** with NodeSvc (`POST /nodes/activate`, idempotent) and reports
    its model list.
 2. **Dials** `GATEWAY_URL` and completes the
-   [agent handshake](../docs/agent-protocol.md): the gateway sends a nonce, the
+   [agent handshake](docs/agent-protocol.md): the gateway sends a nonce, the
    node signs it with its Ed25519 **device key**, and the gateway binds that key
    to the licence on first use.
 3. **Serves jobs** pushed down the socket, streaming tokens back chunk by chunk

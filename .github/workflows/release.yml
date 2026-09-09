@@ -1,0 +1,75 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build and release (e.g. v0.1.0)"
+        required: true
+
+permissions: {}
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      # Without this the build pins an empty key, the manifest silently disables
+      # itself, and every operator is left demanding a hand-written MODELS list.
+      - name: Require the manifest public key
+        env:
+          MANIFEST_PUBKEY: ${{ vars.MANIFEST_PUBKEY }}
+        run: |
+          if [ -z "$MANIFEST_PUBKEY" ]; then
+            echo "::error::Repository variable MANIFEST_PUBKEY is not set."
+            echo "Keep the private half offline and publish the public half:"
+            echo "  gh variable set MANIFEST_PUBKEY --body '<base64 public key>'"
+            exit 1
+          fi
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build
+        env:
+          MANIFEST_PUBKEY: ${{ vars.MANIFEST_PUBKEY }}
+        run: make release
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          MANIFEST_PUBKEY: ${{ vars.MANIFEST_PUBKEY }}
+        run: |
+          cat > notes.md <<NOTES
+          Operator daemon for the Gnodi AI Node Network.
+
+          \`\`\`bash
+          curl -fsSL https://get.gnodi-ai.com | LICENSE_KEY=XXXX-XXXX-XXXX-XXXX sh
+          \`\`\`
+
+          These binaries pin the manifest signing key \`$MANIFEST_PUBKEY\`. A node
+          verifies the model catalog against it, so a compromised gateway cannot
+          tell the fleet which model weights to download.
+
+          Verify a download against \`SHA256SUMS\` before running it.
+          NOTES
+
+          gh release create "$TAG" dist/* \
+            --title "$TAG" \
+            --notes-file notes.md \
+            --verify-tag

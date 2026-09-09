@@ -8,7 +8,7 @@
 # licence key and settings alone.
 set -eu
 
-REPO="${GNODI_REPO:-BlockReignTech/gnodi-ai-contracts}"
+REPO="${GNODI_REPO:-BlockReignTech/gnodi-ai-node}"
 VERSION="${GNODI_VERSION:-latest}"
 BIN_DIR="${GNODI_BIN_DIR:-/usr/local/bin}"
 BIN="$BIN_DIR/gnodi-ai-node"

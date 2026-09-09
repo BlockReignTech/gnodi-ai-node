@@ -36,8 +36,8 @@ PLATFORMS = linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
 .PHONY: release
 release:
 ifndef MANIFEST_PUBKEY
-	$(error MANIFEST_PUBKEY is required. Generate one with: \
-	  npm --prefix ../offchain/gateway run manifest -- gen-key --out ~/gnodi-manifest.key)
+	$(error MANIFEST_PUBKEY is required: the base64 Ed25519 key the model catalog \
+	is verified against. Building without it silently disables the manifest.)
 endif
 	@rm -rf dist && mkdir -p dist
 	@for p in $(PLATFORMS); do \
