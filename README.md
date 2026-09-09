@@ -162,6 +162,10 @@ read, which is not the same as unclaimed.
 
 ## Notes / TODO
 
+- **Releases are tag-triggered.** Pushing a `node-v*` tag builds all four
+  platforms and publishes them with `SHA256SUMS`. The build **refuses** without a
+  `MANIFEST_PUBKEY` repository variable: an empty pin silently disables the
+  manifest and leaves every operator demanding a hand-written `MODELS` list.
 - **One dependency:** `github.com/coder/websocket`, pure Go with no transitive
   dependencies, so the binary stays static and cross-compiles trivially. Hand
   rolling WebSocket framing, masking and the close handshake was not worth the

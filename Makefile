@@ -29,8 +29,16 @@ clean:
 VERSION ?= dev
 PLATFORMS = linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
 
+# The pinned key is what stops a compromised gateway telling the fleet which
+# weights to download. Built without it, -X sets the default to the empty string,
+# the manifest silently disables itself, and every operator is left demanding a
+# hand-written MODELS list — so this refuses rather than shipping that quietly.
 .PHONY: release
 release:
+ifndef MANIFEST_PUBKEY
+	$(error MANIFEST_PUBKEY is required. Generate one with: \
+	  npm --prefix ../offchain/gateway run manifest -- gen-key --out ~/gnodi-manifest.key)
+endif
 	@rm -rf dist && mkdir -p dist
 	@for p in $(PLATFORMS); do \
 		os=$${p%/*}; arch=$${p#*/}; \
@@ -40,4 +48,4 @@ release:
 			-o dist/gnodi-ai-node_$${os}_$${arch} ./cmd/gnodi-ai-node; \
 	done
 	@cd dist && (command -v sha256sum >/dev/null && sha256sum gnodi-ai-node_* || shasum -a 256 gnodi-ai-node_*) > SHA256SUMS
-	@echo "\ndist/:" && ls -1 dist
+	@echo "" && echo "dist/ (manifest key $(MANIFEST_PUBKEY)):" && ls -1 dist
