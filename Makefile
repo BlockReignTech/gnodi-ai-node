@@ -27,7 +27,11 @@ clean:
 # Release artifacts the installer downloads: static binaries plus the checksum
 # file it verifies against.
 VERSION ?= dev
-PLATFORMS = linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
+# Windows is here because the installer already tells Windows operators to
+# "download the .exe from the releases page" — and until now no .exe was ever
+# built, so that instruction led nowhere. An NVIDIA desktop is the most likely
+# machine an operator actually has.
+PLATFORMS = linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64
 
 # The pinned key is what stops a compromised gateway telling the fleet which
 # weights to download. Built without it, -X sets the default to the empty string,
@@ -42,10 +46,11 @@ endif
 	@rm -rf dist && mkdir -p dist
 	@for p in $(PLATFORMS); do \
 		os=$${p%/*}; arch=$${p#*/}; \
+		ext=""; [ "$$os" = "windows" ] && ext=".exe"; \
 		echo "building $$os/$$arch"; \
 		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -trimpath \
 			-ldflags "-s -w -X github.com/blockreigntech/gnodi-ai-node/internal/config.DefaultManifestPubKey=$(MANIFEST_PUBKEY)" \
-			-o dist/gnodi-ai-node_$${os}_$${arch} ./cmd/gnodi-ai-node; \
+			-o dist/gnodi-ai-node_$${os}_$${arch}$$ext ./cmd/gnodi-ai-node; \
 	done
 	@cd dist && (command -v sha256sum >/dev/null && sha256sum gnodi-ai-node_* || shasum -a 256 gnodi-ai-node_*) > SHA256SUMS
 	@echo "" && echo "dist/ (manifest key $(MANIFEST_PUBKEY)):" && ls -1 dist
