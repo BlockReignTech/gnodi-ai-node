@@ -152,6 +152,15 @@ func (d *Daemon) SyncModels(ctx context.Context) error {
 	}
 
 	d.proxy.SetCatalog(res.Catalog)
+
+	// Load the weights before telling anyone they are available. Advertising
+	// first and loading on demand meant the first real request paid a ~2 minute
+	// model load, blew past the gateway's job timeout, and failed over to the
+	// commercial fallback — so the node looked connected and healthy while
+	// serving nothing. Warm drops anything that will not load, so what is
+	// advertised below is what the engine can actually deliver.
+	d.proxy.Warm(ctx)
+
 	d.mu.Lock()
 	d.catalog, d.version = res.Catalog, res.Version
 	d.mu.Unlock()
