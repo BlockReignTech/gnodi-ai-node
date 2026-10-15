@@ -36,6 +36,10 @@ Downloads the binary, verifies it against the published `SHA256SUMS`, writes a
 Re-running upgrades the binary and **leaves your config alone**. Then open the
 dashboard at <http://127.0.0.1:8080>.
 
+For a full start-to-finish runbook on a rented GPU — provisioning, the engine,
+the VRAM budget, verification and what it costs — see
+[Running a node on a cloud GPU](docs/deploy-aws-gpu.md).
+
 ## Build & run from source
 
 ```bash
