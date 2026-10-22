@@ -12,6 +12,11 @@ Vast.ai instance, a machine under your desk. The node **dials out** and listens
 on no inbound port, so it does not need a public address, a DNS name, a
 certificate, or a forwarded port anywhere.
 
+The network's published
+[system requirements and model catalog](https://www.gnodi-ai.com/docs) are the
+reference for what any node can serve; this page is the specific walk-through for
+a rented GPU.
+
 > **Read [What this costs](#9-what-this-costs) before you rent anything.** At
 > today's network volume a rented cloud GPU does not pay for itself. Hardware you
 > already own is a different calculation, and that section gives you both.
@@ -333,11 +338,11 @@ well, and the marginal cost is electricity. Rent a GPU when network volume
 justifies it.
 
 How the earnings themselves work — tier points, quality, daily epochs, the Merkle
-claim — is in
-[ADR-001](https://github.com/BlockReignTech/gnodi-ai-contracts/blob/main/docs/ADR-001-credits-and-revenue-distribution.md).
-Two things to know here: tier points come from your **licence tier** (full 100,
-half 50, quarter 25, mini 10), and quality is `uptime × success rate`, which is
-why the node refuses to advertise a model it cannot actually serve.
+claim, and what is and is not live yet — is at
+<https://www.gnodi-ai.com/docs#rewards>. Two things to know here: tier points
+come from your **licence tier** (full 100, half 50, quarter 25, mini 10), and
+quality is `uptime × success rate`, which is why the node refuses to advertise a
+model it cannot actually serve.
 
 ---
 
