@@ -48,6 +48,27 @@ const statusPage = `<!doctype html>
   tr:last-child td { border-bottom:0 }
   .box { border:1px solid var(--steel); border-radius:10px; background:var(--raised); overflow:hidden }
   code { font-family:ui-monospace,Menlo,monospace; font-size:12px; color:var(--muted); word-break:break-all }
+  .btn { font:600 12px/1 ui-sans-serif,-apple-system,"Segoe UI",sans-serif; letter-spacing:.06em;
+         text-transform:uppercase; border-radius:8px; padding:11px 20px; cursor:pointer;
+         border:1px solid var(--steel); background:var(--raised); color:var(--text) }
+  .btn:hover:not(:disabled) { border-color:var(--accent); color:var(--accent) }
+  .btn.primary { background:var(--accent); border-color:var(--accent); color:var(--surface) }
+  .btn.primary:hover:not(:disabled) { background:#FF8F3C; color:var(--surface) }
+  .btn:disabled { opacity:.5; cursor:default }
+  .bar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin:18px 0 4px }
+  .chat { border:1px solid var(--steel); border-radius:10px; background:var(--raised); padding:14px }
+  .log { min-height:120px; max-height:320px; overflow-y:auto; display:flex; flex-direction:column; gap:10px }
+  .msg { font-size:14px; line-height:1.55; white-space:pre-wrap; word-break:break-word }
+  .msg.you { color:var(--muted) }
+  .msg.you b, .msg.ai b { display:block; font-size:10px; letter-spacing:.14em;
+                          text-transform:uppercase; color:var(--muted); margin-bottom:3px; font-weight:600 }
+  .row { display:flex; gap:8px; margin-top:12px }
+  select, input, textarea {
+    background:var(--surface); border:1px solid var(--steel); color:var(--text);
+    border-radius:8px; padding:10px; font:14px ui-sans-serif,-apple-system,"Segoe UI",sans-serif;
+  }
+  textarea { flex:1; resize:none }
+  .hint { color:var(--muted); font-size:12px; margin-top:8px }
   footer { margin-top:32px; color:var(--muted); font-size:12px }
 </style>
 </head>
@@ -56,6 +77,11 @@ const statusPage = `<!doctype html>
   <h1>Gnodi AI Node</h1>
   <div class="sub">Operator dashboard · loopback only</div>
   <div class="pill"><span class="dot" id="dot"></span><span id="conn">checking…</span></div>
+
+  <div class="bar">
+    <button class="btn primary" id="toggle" disabled>…</button>
+    <span class="sub" id="servestate" style="margin:0"></span>
+  </div>
 
   <div class="grid">
     <div class="tile"><div class="k">Serving now</div><div class="v" id="inflight">–</div></div>
@@ -80,6 +106,23 @@ const statusPage = `<!doctype html>
     <thead><tr><th>Network id</th><th>Engine reference</th></tr></thead>
     <tbody id="models"><tr><td colspan="2">loading…</td></tr></tbody>
   </table></div>
+
+  <h2>Chat with your own node</h2>
+  <div class="chat">
+    <div class="log" id="log">
+      <div class="msg you">Ask your own hardware something. Nothing leaves this machine.</div>
+    </div>
+    <div class="row">
+      <select id="chatmodel"></select>
+      <textarea id="prompt" rows="1" placeholder="Message…"></textarea>
+      <button class="btn" id="send">Send</button>
+    </div>
+    <div class="hint">
+      Runs on the models already loaded for the network — no gateway, no credits, no
+      round trip. A reply here uses the same card the network is served from, so it
+      will queue behind any job in flight.
+    </div>
+  </div>
 
   <h2>Identity</h2>
   <div class="box" style="padding:14px 16px">
@@ -163,6 +206,20 @@ async function refresh() {
     $("models").innerHTML = rows.length
       ? rows.join("")
       : "<tr><td colspan=2>no models ready — check the logs</td></tr>";
+
+    if (d.serving !== serving) paintServing(d.serving !== false);
+
+    // Rebuilt only when the list changes, so it does not fight the operator
+    // mid-selection every three seconds.
+    const picker = $("chatmodel");
+    const have = Array.from(picker.options).map((o) => o.value).join(",");
+    const want = (d.models || []).join(",");
+    if (have !== want) {
+      const keep = picker.value;
+      picker.innerHTML = (d.models || [])
+        .map((m) => "<option value=\"" + m + "\">" + m + "</option>").join("");
+      if ((d.models || []).includes(keep)) picker.value = keep;
+    }
   } catch (e) {
     // The daemon is the thing being watched, so a failed poll is itself the
     // signal worth showing.
@@ -170,6 +227,87 @@ async function refresh() {
     $("conn").textContent = "Daemon not responding";
   }
 }
+let serving = null;
+
+async function setServing(on) {
+  const b = $("toggle");
+  b.disabled = true;
+  b.textContent = on ? "Starting…" : "Stopping…";
+  try {
+    const r = await fetch("/serving", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ on }),
+    });
+    if (!r.ok) throw new Error("status " + r.status);
+    await refresh();
+  } catch (e) {
+    $("servestate").textContent = "That did not take — check the logs.";
+  } finally {
+    b.disabled = false;
+  }
+}
+
+function paintServing(on) {
+  serving = on;
+  const b = $("toggle");
+  b.textContent = on ? "Stop serving" : "Start serving";
+  b.className = on ? "btn" : "btn primary";
+  b.disabled = false;
+  $("servestate").textContent = on
+    ? "Serving the network. Stop to free the card for something else."
+    : "Paused. Weights are unloaded and the card is yours.";
+}
+
+$("toggle").addEventListener("click", () => setServing(!serving));
+
+// --- local chat -----------------------------------------------------------
+const log = $("log");
+
+function bubble(cls, who, text) {
+  const el = document.createElement("div");
+  el.className = "msg " + cls;
+  const b = document.createElement("b");
+  b.textContent = who;
+  el.appendChild(b);
+  el.appendChild(document.createTextNode(text));
+  log.appendChild(el);
+  log.scrollTop = log.scrollHeight;
+  return el;
+}
+
+async function send() {
+  const box = $("prompt");
+  const text = box.value.trim();
+  const model = $("chatmodel").value;
+  if (!text || !model) return;
+  box.value = "";
+  $("send").disabled = true;
+  bubble("you", "You", text);
+  const out = bubble("ai", model, "Thinking…");
+  try {
+    const r = await fetch("/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model, messages: [{ role: "user", content: text }] }),
+    });
+    const d = await r.json();
+    const reply = (d.choices && d.choices[0] && d.choices[0].message &&
+                   d.choices[0].message.content) || "";
+    out.lastChild.textContent = reply || "(no reply)";
+  } catch (e) {
+    out.lastChild.textContent = "The engine did not answer: " + e.message;
+  } finally {
+    $("send").disabled = false;
+    box.focus();
+  }
+}
+
+$("send").addEventListener("click", send);
+$("prompt").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+});
+
 refresh();
 refreshEarnings();
 setInterval(refresh, 3000);

@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -173,5 +174,85 @@ func TestDaemon_StatusReportsPayoutAddress(t *testing.T) {
 	d.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/status", nil))
 	if !strings.Contains(rec.Body.String(), `"operator"`) {
 		t.Errorf("status should carry the payout address field: %s", rec.Body.String())
+	}
+}
+
+// The desktop app's Run/Stop button, and the local chat beside it. Both are
+// loopback routes, so the test exercises them exactly as the dashboard does.
+
+func TestDaemon_ServingToggle(t *testing.T) {
+	ns, _ := fakeNodeSvc(t)
+	d, err := New(testConfig(t, ns.URL))
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	h := d.Handler()
+
+	post := func(body string) map[string]any {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/serving", strings.NewReader(body)))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("POST /serving %s: %d %s", body, rec.Code, rec.Body)
+		}
+		var out map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return out
+	}
+
+	if got := post(`{"on":false}`)["serving"]; got != false {
+		t.Errorf("after stopping, serving = %v, want false", got)
+	}
+	if got := post(`{"on":true}`)["serving"]; got != true {
+		t.Errorf("after starting, serving = %v, want true", got)
+	}
+
+	// Status carries the same state, because the dashboard reads it from there
+	// on its own schedule rather than trusting what the button last returned.
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/status", nil))
+	var status map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &status)
+	if status["serving"] != true {
+		t.Errorf("status reports serving = %v, want true", status["serving"])
+	}
+}
+
+func TestDaemon_ServingRejectsNonsense(t *testing.T) {
+	// A missing field must not be read as "stop" — silently pausing a node
+	// because a request was malformed is the kind of thing an operator would
+	// find hours later.
+	ns, _ := fakeNodeSvc(t)
+	d, err := New(testConfig(t, ns.URL))
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	for _, body := range []string{`{}`, `{"on":"yes"}`, `not json`} {
+		rec := httptest.NewRecorder()
+		d.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/serving", strings.NewReader(body)))
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("POST /serving %s: got %d, want 400", body, rec.Code)
+		}
+	}
+}
+
+func TestDaemon_LocalChatIsMounted(t *testing.T) {
+	// The operator chatting with their own hardware goes straight to the engine
+	// on loopback: no gateway, no credits. Here the engine is absent, so what
+	// matters is that the route exists and is handled rather than 404ing.
+	ns, _ := fakeNodeSvc(t)
+	d, err := New(testConfig(t, ns.URL))
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(`{"model":"llama2-13b","messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	d.Handler().ServeHTTP(rec, req)
+	if rec.Code == http.StatusNotFound {
+		t.Fatal("local chat is not mounted")
 	}
 }

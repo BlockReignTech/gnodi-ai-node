@@ -94,6 +94,13 @@ func (d *Daemon) Handler() http.Handler {
 	mux.HandleFunc("GET /health", d.health)
 	mux.HandleFunc("GET /status", d.status)
 	mux.HandleFunc("GET /earnings", d.earnings)
+	// Pause and resume serving the network. The desktop app's Run/Stop button.
+	mux.HandleFunc("POST /serving", d.setServing)
+	// The node's own models, to the operator who is running them. Loopback
+	// only, like everything else here: this is the chat they paid for with
+	// their own electricity, and it never leaves the machine — no gateway, no
+	// credits, no network round trip.
+	mux.HandleFunc("POST /v1/chat/completions", d.proxy.ChatCompletions)
 	return mux
 }
 
@@ -260,7 +267,39 @@ func (d *Daemon) status(w http.ResponseWriter, _ *http.Request) {
 		"maxConcurrency":  d.cfg.MaxConcurrency,
 		"inFlight":        d.agent.InFlight(),
 		"devicePubkey":    d.key.PublicKeyBase64(),
+		"serving":         d.agent.Accepting(),
 	})
+}
+
+// setServing handles POST /serving {"on": bool}.
+//
+// Stopping drains the node and unloads its weights, because the operator
+// almost certainly wants the card for something else — a paused node that
+// still holds 10GB of VRAM has not really paused. Starting warms the same set
+// again, so this is a pause rather than a reconfiguration.
+func (d *Daemon) setServing(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		On *bool `json:"on"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<10)).Decode(&body); err != nil || body.On == nil {
+		http.Error(w, `{"error":"expected {\"on\": true|false}"}`, http.StatusBadRequest)
+		return
+	}
+
+	budget := d.vramBudget()
+	if *body.On {
+		d.proxy.Warm(r.Context(), budget)
+		d.agent.SetModels(d.proxy.Models())
+		d.agent.Resume()
+		log.Printf("serving: resumed with %v", d.proxy.Models())
+	} else {
+		d.agent.Drain()
+		if budget != nil {
+			d.proxy.Release(r.Context(), budget.Unload)
+		}
+		log.Printf("serving: paused and VRAM released")
+	}
+	writeJSON(w, map[string]any{"serving": d.agent.Accepting(), "models": d.proxy.Models()})
 }
 
 // earnings proxies the operator's claim proofs from the gateway.

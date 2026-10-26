@@ -88,6 +88,23 @@ func (c *Client) Drain() {
 	c.sendJSON(statusFrame{T: "status", Accepting: false, InFlight: c.snapshotInFlight()})
 }
 
+// Resume starts accepting work again after a Drain.
+//
+// Draining used to be one-way, because the only reason to stop was to shut
+// down. On a desktop it is the ordinary case: somebody wants their card back to
+// play a game and expects to hand it back afterwards without restarting
+// anything. The socket stays up throughout, so the node keeps its place and the
+// operator keeps seeing their earnings while paused.
+func (c *Client) Resume() {
+	c.draining.Store(false)
+	c.sendJSON(statusFrame{T: "status", Accepting: true, InFlight: c.snapshotInFlight()})
+}
+
+// Accepting reports whether the node is currently taking work.
+func (c *Client) Accepting() bool {
+	return !c.draining.Load()
+}
+
 // Run connects and serves until ctx is cancelled, reconnecting with exponential
 // backoff plus jitter. It returns only when ctx ends or the gateway rejects the
 // node in a way retrying cannot fix.

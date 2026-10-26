@@ -157,3 +157,25 @@ func (p *Proxy) drop(id string) {
 	defer p.mu.Unlock()
 	delete(p.catalog, id)
 }
+
+// Release unloads every catalogued model from card memory.
+//
+// The counterpart to Warm, for an operator who wants their GPU back. The
+// catalog is left alone: the node still knows what it can serve and will warm
+// the same set again on resume, so pausing is not the same as reconfiguring.
+func (p *Proxy) Release(ctx context.Context, unload func(context.Context, string) error) {
+	if unload == nil {
+		return
+	}
+	for _, id := range p.warmOrder() {
+		ref, ok := p.ref(id)
+		if !ok {
+			continue
+		}
+		if err := unload(ctx, ref); err != nil {
+			log.Printf("release: could not unload %s: %v", ref, err)
+			continue
+		}
+		log.Printf("release: %s unloaded", id)
+	}
+}
