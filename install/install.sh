@@ -32,7 +32,7 @@ case "$arch" in
 esac
 case "$os" in
   linux|darwin) ;;
-  *) die "unsupported OS: $os (Windows: download the .exe from the releases page)" ;;
+  *) die "unsupported OS: $os (Windows: run install/install.ps1 from PowerShell)" ;;
 esac
 
 if [ "$os" = "linux" ]; then

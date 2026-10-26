@@ -36,6 +36,13 @@ Downloads the binary, verifies it against the published `SHA256SUMS`, writes a
 Re-running upgrades the binary and **leaves your config alone**. Then open the
 dashboard at <http://127.0.0.1:8080>.
 
+On **Windows**, use the PowerShell installer instead — it checks the card,
+installs Ollama, pulls the weights, and writes a launcher:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File install.ps1 -LicenseKey ABCD-EFGH-IJKL-MNOP
+```
+
 For a full start-to-finish runbook on a rented GPU — provisioning, the engine,
 the VRAM budget, verification and what it costs — see
 [Running a node on a cloud GPU](docs/deploy-aws-gpu.md).
