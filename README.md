@@ -40,8 +40,14 @@ On **Windows**, use the PowerShell installer instead — it checks the card,
 installs Ollama, pulls the weights, and writes a launcher:
 
 ```powershell
+cd $env:USERPROFILE
+irm https://raw.githubusercontent.com/BlockReignTech/gnodi-ai-node/main/install/install.ps1 -OutFile install.ps1
 powershell -ExecutionPolicy Bypass -File install.ps1 -LicenseKey ABCD-EFGH-IJKL-MNOP
 ```
+
+The `cd` is not decoration: PowerShell opens in `C:\WINDOWS\System32`, which is
+not writable, and the download fails there with an access-denied error that
+looks like a permissions problem with the script rather than with the folder.
 
 For a full start-to-finish runbook on a rented GPU — provisioning, the engine,
 the VRAM budget, verification and what it costs — see
