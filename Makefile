@@ -33,6 +33,10 @@ VERSION ?= dev
 # machine an operator actually has.
 PLATFORMS = linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64
 
+# Stamped into the binary so a node reports the release it is actually running
+# rather than whatever its operator typed into NODE_VERSION.
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+
 # The pinned key is what stops a compromised gateway telling the fleet which
 # weights to download. Built without it, -X sets the default to the empty string,
 # the manifest silently disables itself, and every operator is left demanding a
@@ -49,7 +53,9 @@ endif
 		ext=""; [ "$$os" = "windows" ] && ext=".exe"; \
 		echo "building $$os/$$arch"; \
 		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -trimpath \
-			-ldflags "-s -w -X github.com/blockreigntech/gnodi-ai-node/internal/config.DefaultManifestPubKey=$(MANIFEST_PUBKEY)" \
+			-ldflags "-s -w \
+				-X github.com/blockreigntech/gnodi-ai-node/internal/config.DefaultManifestPubKey=$(MANIFEST_PUBKEY) \
+				-X github.com/blockreigntech/gnodi-ai-node/internal/config.Version=$(VERSION)" \
 			-o dist/gnodi-ai-node_$${os}_$${arch}$$ext ./cmd/gnodi-ai-node; \
 	done
 	@cd dist && (command -v sha256sum >/dev/null && sha256sum gnodi-ai-node_* || shasum -a 256 gnodi-ai-node_*) > SHA256SUMS

@@ -196,3 +196,38 @@ func TestLoad_ExplicitManifestOverrides(t *testing.T) {
 		t.Errorf("overrides ignored: %q %q", c.ManifestURL, c.ManifestPubKey)
 	}
 }
+
+func TestNodeVersionComesFromTheBuild(t *testing.T) {
+	// The binary used to have no idea what it was: NODE_VERSION defaulted to
+	// "dev", so the version reported to NodeSvc on every activate and heartbeat
+	// was whatever the operator had typed into a config file, and "dev" for
+	// everyone who had not. A release stamps config.Version with -ldflags.
+	t.Setenv("LICENSE_KEY", "AAAA-BBBB-CCCC-DDDD")
+	t.Setenv("GATEWAY_URL", "wss://gw.example/v1/agent")
+	t.Setenv("NODESVC_URL", "https://nodes.example")
+	t.Setenv("INFERENCE_URL", "http://127.0.0.1:11434/v1")
+	t.Setenv("MANIFEST_DISABLED", "true")
+	t.Setenv("MODELS", "gnodi/llama3.1-8b")
+
+	prev := Version
+	Version = "v9.9.9"
+	defer func() { Version = prev }()
+
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if c.NodeVersion != "v9.9.9" {
+		t.Errorf("NodeVersion = %q, want the stamped build version", c.NodeVersion)
+	}
+
+	// An explicit NODE_VERSION still wins, so a deployment can override it.
+	t.Setenv("NODE_VERSION", "v0.1.2")
+	c, err = Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if c.NodeVersion != "v0.1.2" {
+		t.Errorf("NodeVersion = %q, want the explicit override", c.NodeVersion)
+	}
+}

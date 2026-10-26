@@ -74,6 +74,17 @@ func (c Config) ManifestEnabled() bool {
 // A public key, and safe in source. The private half never leaves the signer.
 var DefaultManifestPubKey = "5SP2p3zmdGvD523AtowmByyksBPPAB7308jUC6Zu16c="
 
+// Version is the release this binary was built from, stamped by -ldflags.
+//
+// It was NODE_VERSION in the environment, which meant the binary did not know
+// what it was and the operator had to type it. The reference node has
+// `NODE_VERSION=v0.1.2` in its config file, set by hand, and every node whose
+// operator did not bother reports "dev" — which is reported to NodeSvc on every
+// activate and heartbeat, so the fleet's version numbers were whatever people
+// remembered to write down. Nobody installing a desktop app will write anything
+// down at all.
+var Version = "dev"
+
 // gatewayHTTPFrom converts the agent socket URL to the gateway's HTTP base:
 // wss://host/v1/agent -> https://host.
 func gatewayHTTPFrom(gatewayURL string) string {
@@ -112,7 +123,7 @@ func Load() (Config, error) {
 		MaxConcurrency:    atoiDefault(os.Getenv("MAX_CONCURRENCY"), 1),
 		StateDir:          getenv("STATE_DIR", defaultStateDir()),
 		StatusAddr:        getenv("STATUS_ADDR", "127.0.0.1:8080"),
-		NodeVersion:       getenv("NODE_VERSION", "dev"),
+		NodeVersion:       getenv("NODE_VERSION", Version),
 		ChainRPC:          trimURL(os.Getenv("CHAIN_RPC")),
 		Engine:            getenv("ENGINE", "ollama"),
 		VramGb:            atoiDefault(os.Getenv("VRAM_GB"), 0),
