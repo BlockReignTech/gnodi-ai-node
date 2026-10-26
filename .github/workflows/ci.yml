@@ -41,6 +41,21 @@ jobs:
       - name: Check installer syntax
         run: sh -n install/install.sh
 
+      # Windows PowerShell 5.1 -- still the default on Windows 10 and 11 -- reads
+      # a BOM-less .ps1 as Windows-1252, so a UTF-8 em dash arrives as three
+      # bytes and breaks the string it sits inside. The first operator to run
+      # install.ps1 got nine parse errors from two em dashes and an ellipsis,
+      # none of which pointed at the real cause. PowerShell 7 parses the same
+      # file cleanly, so this cannot be caught by parsing it.
+      - name: Installer must be pure ASCII
+        run: |
+          if LC_ALL=C grep -n '[^[:print:][:space:]]' install/install.ps1; then
+            echo "::error::install/install.ps1 contains non-ASCII bytes (lines above)."
+            echo "Windows PowerShell 5.1 reads it as Windows-1252 and the parse breaks."
+            exit 1
+          fi
+          echo "install.ps1 is ASCII-only"
+
       # Proves the four platforms still cross-compile. The key here is a
       # placeholder and the artifacts are discarded — shippable builds come from
       # the release workflow, which uses the real key.

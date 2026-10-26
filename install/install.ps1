@@ -73,10 +73,10 @@ if ($vramGb -lt 8) {
 Step "Checking the inference engine"
 $ollama = Get-Command ollama -ErrorAction SilentlyContinue
 if (-not $ollama) {
-  Info "Ollama is not installed. Downloading the installer…"
+  Info "Ollama is not installed. Downloading the installer..."
   $setup = Join-Path $env:TEMP "OllamaSetup.exe"
   Invoke-WebRequest -Uri "https://ollama.com/download/OllamaSetup.exe" -OutFile $setup -UseBasicParsing
-  Info "Running it — accept the prompts, then this script continues."
+  Info "Running it -- accept the prompts, then this script continues."
   Start-Process -FilePath $setup -Wait
   $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
               [Environment]::GetEnvironmentVariable("Path", "User")
@@ -88,7 +88,7 @@ Info "Ollama at $($ollama.Source)"
 # Keep the weights resident.
 #
 # Ollama evicts an idle model after five minutes by default, and the next
-# request then pays a cold load — measured at 80 to 115 seconds on a T4 against
+# request then pays a cold load -- measured at 80 to 115 seconds on a T4 against
 # about 45ms warm. At real traffic most requests arrive more than five minutes
 # apart, so most requests would be cold: past the gateway's job timeout, failed
 # over to the paid fallback, and from a user's seat the node simply hangs.
@@ -119,13 +119,13 @@ if (-not (Get-Process ollama -ErrorAction SilentlyContinue)) {
 # instead of looking like a hang. The daemon would fetch the same weights from
 # the same signed catalog; this only front-loads it.
 if (-not $SkipModels) {
-  Step "Downloading model weights (several GB — this is the slow part)"
+  Step "Downloading model weights (several GB -- this is the slow part)"
   $models = @("llama3.1:8b-instruct-q4_K_M", "mistral:7b-instruct-q4_K_M")
   if ($vramGb -ge 24) { $models += "gemma3:12b-it-q4_K_M" }
   foreach ($m in $models) {
     Info "pulling $m"
     & $ollama.Source pull $m
-    if ($LASTEXITCODE -ne 0) { Warn "could not pull $m — the daemon will try again on start" }
+    if ($LASTEXITCODE -ne 0) { Warn "could not pull $m -- the daemon will try again on start" }
   }
 }
 
@@ -149,7 +149,7 @@ try {
                ForEach-Object { ($_ -split '\s+')[0] } | Select-Object -First 1)
   $actual = (Get-FileHash -Path $tmp -Algorithm SHA256).Hash.ToLower()
   if ($expected -and $expected.ToLower() -ne $actual) {
-    Die "checksum mismatch — refusing to install`n  published:  $expected`n  downloaded: $actual"
+    Die "checksum mismatch -- refusing to install`n  published:  $expected`n  downloaded: $actual"
   }
   if ($expected) { Info "checksum verified" } else { Warn "no checksum published for $asset" }
 } catch {
@@ -170,7 +170,7 @@ if (Test-Path $EnvFile) {
 
   # MODELS is deliberately not set. The daemon reads the network's signed
   # catalog, picks what this card can hold, verifies each digest, and warms the
-  # set before advertising any of it — and since v0.2.0 it measures the resident
+  # set before advertising any of it -- and since v0.2.0 it measures the resident
   # set as it loads so it keeps only what fits together. Listing models by hand
   # overrides all of that.
   @"
@@ -211,7 +211,7 @@ if (-not (Get-Process ollama -ErrorAction SilentlyContinue)) {
   if ($o) { Start-Process -FilePath $o.Source -ArgumentList "serve" -WindowStyle Hidden; Start-Sleep 4 }
 }
 Write-Host "Dashboard: http://127.0.0.1:8080" -ForegroundColor Cyan
-Write-Host "First start warms the models before serving — expect a few minutes.`n"
+Write-Host "First start warms the models before serving -- expect a few minutes.`n"
 & (Join-Path $dir "gnodi-ai-node.exe")
 '@ | Set-Content -Path $Launcher -Encoding ASCII
 Info "wrote $Launcher"
@@ -230,6 +230,6 @@ Write-Host @"
   shows "Daemon not responding" for a few minutes and then connects. That is
   the node refusing to accept work it cannot yet serve.
 
-  Stop serving from the dashboard when you want the card back — it unloads the
+  Stop serving from the dashboard when you want the card back -- it unloads the
   weights and hands the GPU over without shutting anything down.
 "@
