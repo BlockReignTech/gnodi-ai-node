@@ -63,10 +63,14 @@ a GPU cannot serve the network.
 }
 $vramMib = [int](& nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | Select-Object -First 1)
 $gpuName = (& nvidia-smi --query-gpu=name --format=csv,noheader | Select-Object -First 1).Trim()
-$vramGb = [math]::Floor($vramMib / 1024)
-Info "$gpuName with $vramGb GB of VRAM"
+# Rounded, not truncated. A card never reports the size on its box -- an 8GB
+# RTX 5060 Ti reports 8151MiB because the driver reserves the rest -- and
+# truncating 7.96 gives 7, which is below every threshold in the catalog. The
+# first 8GB card to run this was told nothing fits it.
+$vramGb = [math]::Round($vramMib / 1024)
+Info "$gpuName with $vramGb GB of VRAM ($vramMib MiB reported)"
 if ($vramGb -lt 8) {
-  Die "8 GB is the minimum; this card reports $vramGb GB. Nothing in the catalog fits."
+  Die "8 GB is the minimum; this card reports $vramMib MiB. Nothing in the catalog fits."
 }
 
 # --- 2. the engine ---------------------------------------------------------
@@ -120,8 +124,19 @@ if (-not (Get-Process ollama -ErrorAction SilentlyContinue)) {
 # the same signed catalog; this only front-loads it.
 if (-not $SkipModels) {
   Step "Downloading model weights (several GB -- this is the slow part)"
-  $models = @("llama3.1:8b-instruct-q4_K_M", "mistral:7b-instruct-q4_K_M")
-  if ($vramGb -ge 24) { $models += "gemma3:12b-it-q4_K_M" }
+  # What this card can actually hold at once, which is not the same as what it
+  # is allowed to run. The daemon measures the resident set as it loads and
+  # keeps only the models that fit together, so pulling more than that is
+  # several gigabytes of download for weights it will drop anyway.
+  if ($vramGb -ge 24) {
+    $models = @("gemma3:12b-it-q4_K_M", "llama3.1:8b-instruct-q4_K_M", "mistral:7b-instruct-q4_K_M")
+  } elseif ($vramGb -ge 12) {
+    $models = @("llama3.1:8b-instruct-q4_K_M", "mistral:7b-instruct-q4_K_M")
+  } else {
+    # 8-11GB: one model, with headroom for its context. mistral-7b is the
+    # smallest in the catalog and the network routes real traffic to it.
+    $models = @("mistral:7b-instruct-q4_K_M")
+  }
   foreach ($m in $models) {
     Info "pulling $m"
     & $ollama.Source pull $m

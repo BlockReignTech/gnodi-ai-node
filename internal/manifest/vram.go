@@ -29,7 +29,13 @@ func DetectVramGb(ctx context.Context) int {
 		if err != nil {
 			continue
 		}
-		if gb := mib / 1024; gb > best {
+		// Rounded, not truncated. A card never reports the size on its box:
+		// an 8GB RTX 5060 Ti reports 8151MiB because the driver reserves the
+		// rest, and truncating 7.96 gives 7 -- below every threshold in the
+		// catalog, so a perfectly capable card is told nothing fits it. The
+		// thresholds are written against marketed sizes, so this has to
+		// recover the marketed size.
+		if gb := (mib + 512) / 1024; gb > best {
 			best = gb
 		}
 	}
