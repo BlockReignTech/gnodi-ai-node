@@ -294,7 +294,19 @@ async function send() {
     const d = await r.json();
     const reply = (d.choices && d.choices[0] && d.choices[0].message &&
                    d.choices[0].message.content) || "";
-    out.lastChild.textContent = reply || "(no reply)";
+    if (reply) {
+      out.lastChild.textContent = reply;
+      return;
+    }
+    // Say what actually came back. "(no reply)" hid a perfectly good error
+    // message from the engine for as long as it took somebody to read the
+    // daemon's source, and the first real bug here was exactly that: an error
+    // object where an answer should have been.
+    const why = (d.error && (d.error.message || d.error)) || d.message ||
+                (r.ok ? "" : "HTTP " + r.status);
+    out.lastChild.textContent = why
+      ? "No answer: " + (typeof why === "string" ? why : JSON.stringify(why))
+      : "No answer, and the engine said nothing about why.";
   } catch (e) {
     out.lastChild.textContent = "The engine did not answer: " + e.message;
   } finally {

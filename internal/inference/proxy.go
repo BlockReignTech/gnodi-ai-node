@@ -129,8 +129,20 @@ func (p *Proxy) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "request must include a JSON \"model\" field")
 		return
 	}
-	if _, ok := p.ref(probe.Model); !ok {
+	engineRef, ok := p.ref(probe.Model)
+	if !ok {
 		writeError(w, http.StatusNotFound, "model not served by this node: "+probe.Model)
+		return
+	}
+
+	// The caller asks for a network id; the engine wants its own reference.
+	// Forwarding the body unchanged sent Ollama "gnodi/llama3.1-8b", a name it
+	// has never heard of, and it answered with an error object that this
+	// handler passed straight back. The job path has always translated here
+	// (see Stream); this one did not, and nothing was mounted on it to notice.
+	body, err = withModel(body, engineRef)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "could not rewrite the model field: "+err.Error())
 		return
 	}
 
@@ -181,4 +193,22 @@ func writeError(w http.ResponseWriter, code int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"message": msg}})
+}
+
+// withModel replaces the "model" field, leaving every other field byte-exact.
+//
+// Decoded into raw messages rather than a struct so that whatever else the
+// caller sent — temperature, stream, tools, anything this daemon has no opinion
+// about — reaches the engine exactly as written.
+func withModel(body []byte, model string) ([]byte, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
+		return nil, err
+	}
+	ref, err := json.Marshal(model)
+	if err != nil {
+		return nil, err
+	}
+	fields["model"] = ref
+	return json.Marshal(fields)
 }
