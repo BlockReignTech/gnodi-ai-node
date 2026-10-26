@@ -28,6 +28,24 @@ type Manager struct {
 type SyncResult struct {
 	Version int
 	Catalog Catalog
+	// Order is Catalog's ids, smallest model first.
+	//
+	// A map has no order, and this one decides which models get the card's
+	// memory when they cannot all be held at once: the warm pass walks this
+	// list and stops when the budget is spent.
+	//
+	// Smallest first, which is not the obvious choice. Largest first sounds
+	// better — offer the most capable thing the card can hold — but simulated
+	// against measured resident sizes it gives exactly one model on every card:
+	// a 16GB card serves qwen2.5-14b alone and nothing else fits beside it.
+	// That is the most capable node that earns nothing, because the router's
+	// traffic is overwhelmingly for the small models, and a node serving only
+	// what nobody requests is idle hardware with a good spec sheet.
+	//
+	// Smallest first fills a 16GB card with llama3.1-8b and mistral-7b, which
+	// is what the reference node runs and what the gateway actually routes. An
+	// operator who wants the big model instead sets MODELS by hand.
+	Order   []string
 	Pulled  []string
 	Skipped map[string]string // model id -> why
 }
@@ -99,11 +117,17 @@ func (m *Manager) Sync(ctx context.Context) (SyncResult, error) {
 			res.Skipped[model.ID] = "digest mismatch"
 		default:
 			res.Catalog[model.ID] = model.Ref
+			res.Order = append(res.Order, model.ID)
 		}
 	}
 
 	if len(res.Catalog) == 0 {
 		return res, fmt.Errorf("no catalog model is ready to serve")
+	}
+	// SelectForVram ranks by threshold descending; the fill order is the
+	// reverse. See the note on Order.
+	for i, j := 0, len(res.Order)-1; i < j; i, j = i+1, j-1 {
+		res.Order[i], res.Order[j] = res.Order[j], res.Order[i]
 	}
 	m.logf("manifest: v%d ready with %s", res.Version, join(res.Catalog))
 	return res, nil

@@ -151,7 +151,7 @@ func (d *Daemon) SyncModels(ctx context.Context) error {
 		log.Printf("manifest: skipping %s — %s", id, why)
 	}
 
-	d.proxy.SetCatalog(res.Catalog)
+	d.proxy.SetCatalog(res.Catalog, res.Order...)
 
 	// Load the weights before telling anyone they are available. Advertising
 	// first and loading on demand meant the first real request paid a ~2 minute
@@ -159,7 +159,13 @@ func (d *Daemon) SyncModels(ctx context.Context) error {
 	// commercial fallback — so the node looked connected and healthy while
 	// serving nothing. Warm drops anything that will not load, so what is
 	// advertised below is what the engine can actually deliver.
-	d.proxy.Warm(ctx)
+	// Bounded by what the card can actually hold at once. The catalog's VRAM
+	// threshold is per model, so everything at or under the card's size is
+	// eligible and — with weights pinned resident — held simultaneously. On a
+	// 15GB card that is three models and about 20GB of weights, which thrashes
+	// rather than fails. Warm measures the resident set as it goes and drops
+	// whatever does not fit beside what is already loaded.
+	d.proxy.Warm(ctx, d.vramBudget())
 
 	d.mu.Lock()
 	d.catalog, d.version = res.Catalog, res.Version
@@ -315,4 +321,25 @@ func (d *Daemon) modelsVram() int {
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// vramBudget bounds the warmed set to what this card can hold.
+//
+// Nil when the engine's management API is not available, which leaves the
+// warm pass unbounded — the behaviour before this existed, and still correct
+// for an operator who has chosen their MODELS by hand.
+func (d *Daemon) vramBudget() *inference.VramBudget {
+	if d.models == nil || d.models.Ollama == nil {
+		return nil
+	}
+	bytes := manifest.BudgetBytes(d.models.VramGb)
+	if bytes <= 0 {
+		return nil
+	}
+	ollama := d.models.Ollama
+	return &inference.VramBudget{
+		Bytes:    bytes,
+		Resident: ollama.ResidentBytes,
+		Unload:   ollama.Unload,
+	}
 }

@@ -23,6 +23,7 @@ type Proxy struct {
 	backendURL string // POSTs to backendURL + "/chat/completions"
 	mu         sync.RWMutex
 	catalog    map[string]string // model id -> engine ref
+	order      []string          // catalog ids, largest model first
 	http       *http.Client
 }
 
@@ -40,14 +41,55 @@ func NewProxy(backendURL string, models []string, hc *http.Client) *Proxy {
 }
 
 // SetCatalog replaces the served models. Safe to call while jobs are running.
-func (p *Proxy) SetCatalog(catalog map[string]string) {
+//
+// `order` decides which models get the card's memory when they cannot all be
+// held at once; an empty order falls back to whatever order the map yields,
+// which is fine when nothing is competing for memory.
+func (p *Proxy) SetCatalog(catalog map[string]string, order ...string) {
 	next := make(map[string]string, len(catalog))
 	for id, ref := range catalog {
 		next[id] = ref
 	}
+	seq := make([]string, 0, len(next))
+	for _, id := range order {
+		if _, ok := next[id]; ok {
+			seq = append(seq, id)
+		}
+	}
+	// Anything the caller did not rank still has to be warmed.
+	for _, id := range sortedKeys(next) {
+		if !contains(seq, id) {
+			seq = append(seq, id)
+		}
+	}
 	p.mu.Lock()
-	p.catalog = next
+	p.catalog, p.order = next, seq
 	p.mu.Unlock()
+}
+
+func sortedKeys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func contains(xs []string, x string) bool {
+	for _, v := range xs {
+		if v == x {
+			return true
+		}
+	}
+	return false
+}
+
+// warmOrder is the catalog in the order memory should be given out.
+func (p *Proxy) warmOrder() []string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return append([]string(nil), p.order...)
 }
 
 // ref resolves a network model id to its engine reference.

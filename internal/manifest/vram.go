@@ -35,3 +35,38 @@ func DetectVramGb(ctx context.Context) int {
 	}
 	return best
 }
+
+// vramReserveFraction and vramReserveFloor hold memory back from the warmed set.
+//
+// The card's size is not the budget. A model's resident footprint grows with
+// the context it is serving, the allocator fragments, and on a desktop the
+// compositor, the browser and anything else with a window are already holding
+// VRAM that the engine's own accounting cannot see. Spending the whole card
+// means the first long prompt is the one that fails.
+const (
+	vramReserveFraction = 0.15
+	vramReserveFloor    = int64(1536) << 20 // 1.5 GiB
+)
+
+// BudgetBytes is how much card memory the warmed set may occupy.
+//
+// This exists because the catalog's own threshold is per model and not
+// cumulative: every model at or under the card's size is eligible, and with
+// weights pinned resident they are all held at once. On a 15GB card that
+// selects three models totalling about 20GB — which does not fail cleanly, it
+// thrashes. The budget is what turns "every model that fits alone" into "the
+// models that fit together".
+func BudgetBytes(vramGb int) int64 {
+	if vramGb <= 0 {
+		return 0 // unknown card: no budget to enforce, and nothing to enforce it on
+	}
+	total := int64(vramGb) << 30
+	reserve := int64(float64(total) * vramReserveFraction)
+	if reserve < vramReserveFloor {
+		reserve = vramReserveFloor
+	}
+	if reserve >= total {
+		return 0
+	}
+	return total - reserve
+}
