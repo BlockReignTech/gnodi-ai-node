@@ -162,6 +162,7 @@ internal/nodesvc/    NodeSvc client: activate, capabilities, heartbeat
 internal/chain/      optional CometBFT /status + /net_info metrics
 internal/daemon/     lifecycle orchestration + loopback dashboard
 install/             one-line installer + service units
+cmd/gnodi-ai-node-tray/  Windows: the same daemon with a tray icon, no console
 ```
 
 ## Dashboard
@@ -182,10 +183,14 @@ read, which is not the same as unclaimed.
   and publishes them with `SHA256SUMS`. The build **refuses** without a
   `MANIFEST_PUBKEY` repository variable: an empty pin silently disables the
   manifest and leaves every operator demanding a hand-written `MODELS` list.
-- **One dependency:** `github.com/coder/websocket`, pure Go with no transitive
-  dependencies, so the binary stays static and cross-compiles trivially. Hand
-  rolling WebSocket framing, masking and the close handshake was not worth the
-  risk of getting it subtly wrong.
+- **The daemon has one dependency:** `github.com/coder/websocket`, pure Go with
+  no transitive dependencies, so the binary stays static and cross-compiles
+  trivially. Hand rolling WebSocket framing, masking and the close handshake was
+  not worth the risk of getting it subtly wrong.
+- **The tray build adds `fyne.io/systray`**, and only the tray build links it:
+  `go build` is per package, so the daemon binaries on every platform are
+  unchanged. It needs no cgo on Windows, which is what keeps the release
+  cross-compiling from one machine.
 - **macOS VRAM is not auto-detected.** Detection uses `nvidia-smi`; on Apple
   silicon set `VRAM_GB` by hand. The node says so rather than guessing, because a
   wrong guess either wastes the machine or fails every job with an OOM.

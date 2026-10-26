@@ -39,6 +39,7 @@ $Home_ = Join-Path $env:LOCALAPPDATA "GnodiAINode"
 $Exe = Join-Path $Home_ "gnodi-ai-node.exe"
 $EnvFile = Join-Path $Home_ "node.env"
 $Launcher = Join-Path $Home_ "start-node.ps1"
+$TrayExe = Join-Path $Home_ "gnodi-ai-node-tray.exe"
 
 function Info($m) { Write-Host "  $m" }
 function Step($m) { Write-Host "`n==> $m" -ForegroundColor Cyan }
@@ -147,31 +148,52 @@ if (-not $SkipModels) {
 # --- 4. the daemon ---------------------------------------------------------
 Step "Installing the node daemon"
 $asset = "gnodi-ai-node_windows_amd64.exe"
+$TrayAsset = "gnodi-ai-node-tray_windows_amd64.exe"
 $base = if ($Version -eq "latest") {
   "https://github.com/$Repo/releases/latest/download"
 } else {
   "https://github.com/$Repo/releases/download/$Version"
 }
-$tmp = Join-Path $env:TEMP $asset
-Invoke-WebRequest -Uri "$base/$asset" -OutFile $tmp -UseBasicParsing
-
-# Verify before running it. This binary holds a licence key and a device key and
-# runs unattended; one extra request is cheap insurance.
+# Published checksums, fetched once and used for both binaries. These hold a
+# licence key and a device key and run unattended; one extra request is cheap.
+$sums = $null
 try {
   $sumsPath = Join-Path $env:TEMP "SHA256SUMS"
   Invoke-WebRequest -Uri "$base/SHA256SUMS" -OutFile $sumsPath -UseBasicParsing
-  $expected = (Get-Content $sumsPath | Where-Object { $_ -match [regex]::Escape($asset) } |
-               ForEach-Object { ($_ -split '\s+')[0] } | Select-Object -First 1)
-  $actual = (Get-FileHash -Path $tmp -Algorithm SHA256).Hash.ToLower()
-  if ($expected -and $expected.ToLower() -ne $actual) {
-    Die "checksum mismatch -- refusing to install`n  published:  $expected`n  downloaded: $actual"
-  }
-  if ($expected) { Info "checksum verified" } else { Warn "no checksum published for $asset" }
+  $sums = Get-Content $sumsPath
 } catch {
   Warn "could not fetch SHA256SUMS; skipping verification ($($_.Exception.Message))"
 }
-Move-Item -Force -Path $tmp -Destination $Exe
+
+function Fetch($name, $dest) {
+  $tmp = Join-Path $env:TEMP $name
+  Invoke-WebRequest -Uri "$base/$name" -OutFile $tmp -UseBasicParsing
+  if ($sums) {
+    $expected = ($sums | Where-Object { $_ -match [regex]::Escape($name) } |
+                 ForEach-Object { ($_ -split '\s+')[0] } | Select-Object -First 1)
+    $actual = (Get-FileHash -Path $tmp -Algorithm SHA256).Hash.ToLower()
+    if ($expected -and $expected.ToLower() -ne $actual) {
+      Die "checksum mismatch on $name -- refusing to install`n  published:  $expected`n  downloaded: $actual"
+    }
+    if ($expected) { Info "$name checksum verified" } else { Warn "no checksum published for $name" }
+  }
+  Move-Item -Force -Path $tmp -Destination $dest
+}
+
+Fetch $asset $Exe
 Info "installed $Exe"
+
+# The tray build: the same daemon, with no console window and a notification
+# area icon. Older releases did not publish it, so a missing asset is not fatal
+# -- the launcher still works.
+try {
+  Fetch $TrayAsset $TrayExe
+  Info "installed $TrayExe"
+  $HaveTray = $true
+} catch {
+  Warn "no tray build in this release; the launcher will be used instead"
+  $HaveTray = $false
+}
 
 # --- 5. configuration ------------------------------------------------------
 Step "Configuration"
@@ -231,20 +253,57 @@ Write-Host "First start warms the models before serving -- expect a few minutes.
 '@ | Set-Content -Path $Launcher -Encoding ASCII
 Info "wrote $Launcher"
 
-# --- 7. done ---------------------------------------------------------------
+# --- 7. a shortcut, since the point is not to need a terminal ---------------
+# Start Menu only, deliberately not Startup. Starting and stopping the node is
+# the operator's decision while this is being tested, and a thing that launches
+# itself at boot is a thing somebody discovers running three weeks later.
+if ($HaveTray) {
+  Step "Adding a Start Menu shortcut"
+  try {
+    $startMenu = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs"
+    $lnk = Join-Path $startMenu "Gnodi AI Node.lnk"
+    $shell = New-Object -ComObject WScript.Shell
+    $sc = $shell.CreateShortcut($lnk)
+    $sc.TargetPath = $TrayExe
+    $sc.WorkingDirectory = $Home_
+    $sc.IconLocation = $TrayExe
+    $sc.Description = "Serve AI inference from this machine"
+    $sc.Save()
+    Info "Start Menu: Gnodi AI Node"
+  } catch {
+    Warn "could not create the shortcut ($($_.Exception.Message)); run $TrayExe directly"
+  }
+}
+
+# --- 8. done ---------------------------------------------------------------
 Write-Host "`n==> Ready" -ForegroundColor Green
-Write-Host @"
+if ($HaveTray) {
+  Write-Host @"
+
+  Start it from the Start Menu: Gnodi AI Node
+
+  It runs in the notification area with no window. Right-click the icon for
+  the dashboard, to pause and resume serving, or to read the log. Quit from
+  that menu stops the node.
+
+  Dashboard:   http://127.0.0.1:8080
+  Config:      $EnvFile
+  Log:         $(Join-Path $Home_ "node.log")
+
+  The first start loads each model before advertising it, so the icon says
+  "starting" for a few minutes and then reports what it is serving. That is the
+  node refusing work it cannot yet deliver.
+
+  Pause from the icon when you want the card back -- it unloads the weights and
+  hands the GPU over without shutting anything down.
+"@
+} else {
+  Write-Host @"
 
   Start the node:
       powershell -ExecutionPolicy Bypass -File "$Launcher"
 
   Dashboard:   http://127.0.0.1:8080
   Config:      $EnvFile
-
-  The first start loads each model before advertising it, so the dashboard
-  shows "Daemon not responding" for a few minutes and then connects. That is
-  the node refusing to accept work it cannot yet serve.
-
-  Stop serving from the dashboard when you want the card back -- it unloads the
-  weights and hands the GPU over without shutting anything down.
 "@
+}

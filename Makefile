@@ -58,5 +58,14 @@ endif
 				-X github.com/blockreigntech/gnodi-ai-node/internal/config.Version=$(VERSION)" \
 			-o dist/gnodi-ai-node_$${os}_$${arch}$$ext ./cmd/gnodi-ai-node; \
 	done
-	@cd dist && (command -v sha256sum >/dev/null && sha256sum gnodi-ai-node_* || shasum -a 256 gnodi-ai-node_*) > SHA256SUMS
+	@# The tray is Windows-only and built with -H=windowsgui so no console
+	@# window appears -- which is the entire reason it exists, and also why its
+	@# log goes to a file beside the executable rather than to stdout.
+	@echo "building windows/amd64 (tray)"
+	@CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath \
+		-ldflags "-s -w -H=windowsgui \
+			-X github.com/blockreigntech/gnodi-ai-node/internal/config.DefaultManifestPubKey=$(MANIFEST_PUBKEY) \
+			-X github.com/blockreigntech/gnodi-ai-node/internal/config.Version=$(VERSION)" \
+		-o dist/gnodi-ai-node-tray_windows_amd64.exe ./cmd/gnodi-ai-node-tray
+	@cd dist && (command -v sha256sum >/dev/null && sha256sum gnodi-ai-node* || shasum -a 256 gnodi-ai-node*) > SHA256SUMS
 	@echo "" && echo "dist/ (manifest key $(MANIFEST_PUBKEY)):" && ls -1 dist
