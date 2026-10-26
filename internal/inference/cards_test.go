@@ -59,7 +59,11 @@ func TestWhatEachCardServes(t *testing.T) {
 		p.SetCatalog(catalog, order...)
 		budget := manifest.BudgetBytes(card)
 		p.Warm(context.Background(), &VramBudget{Bytes: budget, Resident: e.resident, Unload: e.unload})
-		used, _ := e.resident(context.Background())
+		residentNow, _ := e.resident(context.Background())
+		var used int64
+		for _, b := range residentNow {
+			used += b
+		}
 		srv.Close()
 
 		got := p.Models()

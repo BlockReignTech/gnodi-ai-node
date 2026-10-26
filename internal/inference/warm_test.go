@@ -108,10 +108,21 @@ type engine struct {
 	loaded   map[string]int64
 	sizes    map[string]int64
 	unloaded []string
+	evicted  []string
+	capacity int64
 }
 
 func newEngine(sizes map[string]int64) *engine {
 	return &engine{loaded: map[string]int64{}, sizes: sizes}
+}
+
+// capacity, when set, makes the stub behave the way Ollama actually does:
+// rather than refusing a model that will not fit, it evicts whatever it has to
+// in order to load the new one. That is why a resident *total* can never
+// exceed the card, and why a budget compared against the total never trips.
+func (e *engine) withCapacity(bytes int64) *engine {
+	e.capacity = bytes
+	return e
 }
 
 func (e *engine) serve() *httptest.Server {
@@ -120,22 +131,48 @@ func (e *engine) serve() *httptest.Server {
 		var req map[string]any
 		_ = json.Unmarshal(body, &req)
 		ref, _ := req["model"].(string)
+
 		e.mu.Lock()
+		if e.capacity > 0 {
+			want := e.sizes[ref]
+			used := int64(0)
+			for r2, s := range e.loaded {
+				if r2 != ref {
+					used += s
+				}
+			}
+			// Evict, oldest-arbitrary, until the newcomer fits.
+			for used+want > e.capacity {
+				for r2 := range e.loaded {
+					if r2 == ref {
+						continue
+					}
+					used -= e.loaded[r2]
+					delete(e.loaded, r2)
+					e.evicted = append(e.evicted, r2)
+					break
+				}
+				if len(e.loaded) == 0 {
+					break
+				}
+			}
+		}
 		e.loaded[ref] = e.sizes[ref]
 		e.mu.Unlock()
+
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"x"}}]}`))
 	}))
 }
 
-func (e *engine) resident(context.Context) (int64, error) {
+func (e *engine) resident(context.Context) (map[string]int64, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	var total int64
-	for _, s := range e.loaded {
-		total += s
+	out := make(map[string]int64, len(e.loaded))
+	for r, s := range e.loaded {
+		out[r] = s
 	}
-	return total, nil
+	return out, nil
 }
 
 func (e *engine) unload(_ context.Context, ref string) error {
@@ -208,7 +245,7 @@ func TestWarmKeepsAModelWhenTheProbeFails(t *testing.T) {
 
 	p.Warm(context.Background(), &VramBudget{
 		Bytes:    gb,
-		Resident: func(context.Context) (int64, error) { return 0, errors.New("engine unreachable") },
+		Resident: func(context.Context) (map[string]int64, error) { return nil, errors.New("engine unreachable") },
 		Unload:   e.unload,
 	})
 
@@ -252,5 +289,36 @@ func TestWarmWithoutABudgetServesEverything(t *testing.T) {
 
 	if got := p.Models(); len(got) != 2 {
 		t.Fatalf("expected both served with no budget, got %v", got)
+	}
+}
+
+func TestWarmDropsAModelThatEvictsAnother(t *testing.T) {
+	// The hole in the first version of this: checking the resident *total*.
+	// An 8GB card with two 5GB models never reports more than 5GB resident,
+	// because the engine evicts one to load the other — so the total stays
+	// under budget and both get advertised. The node then swaps weights on
+	// every request, which from the gateway's side is a node that is simply
+	// slow and unreliable.
+	e := newEngine(map[string]int64{"a:ref": 5 * gb, "b:ref": 5 * gb}).withCapacity(8 * gb)
+	srv := e.serve()
+	defer srv.Close()
+
+	p := NewProxy(srv.URL, nil, nil)
+	p.SetCatalog(map[string]string{"gnodi/a": "a:ref", "gnodi/b": "b:ref"}, "gnodi/a", "gnodi/b")
+
+	p.Warm(context.Background(), &VramBudget{Bytes: 6500 * (1 << 20), Resident: e.resident, Unload: e.unload})
+
+	got := p.Models()
+	if len(got) != 1 {
+		t.Fatalf("two 5GB models cannot coexist in 8GB; serves %v", got)
+	}
+	if got[0] != "gnodi/a" {
+		t.Errorf("the first model warmed should survive, got %v", got)
+	}
+	// And the one that was displaced must be resident again, not left unloaded
+	// because something that did not fit knocked it out on its way past.
+	resident, _ := e.resident(context.Background())
+	if _, ok := resident["a:ref"]; !ok {
+		t.Error("the displaced model was not restored")
 	}
 }

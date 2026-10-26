@@ -157,17 +157,21 @@ func (o *Ollama) Resident(ctx context.Context) ([]Loaded, error) {
 	return out, nil
 }
 
-// ResidentBytes is the total of Resident.
-func (o *Ollama) ResidentBytes(ctx context.Context) (int64, error) {
+// ResidentByRef is Resident keyed by engine reference.
+//
+// Per model rather than totalled, because the engine evicts to make room: a
+// total never exceeds the card however much is asked of it, so the only honest
+// question is which models are held at the same time.
+func (o *Ollama) ResidentByRef(ctx context.Context) (map[string]int64, error) {
 	loaded, err := o.Resident(ctx)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	var total int64
+	out := make(map[string]int64, len(loaded))
 	for _, m := range loaded {
-		total += m.VramBytes
+		out[m.Ref] = m.VramBytes
 	}
-	return total, nil
+	return out, nil
 }
 
 // Unload releases a model from card memory.

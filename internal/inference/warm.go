@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -33,8 +34,14 @@ const warmTimeout = 5 * time.Minute
 type VramBudget struct {
 	// Bytes the resident set may occupy. Zero means unbounded.
 	Bytes int64
-	// Resident reports what the engine currently holds, in bytes.
-	Resident func(context.Context) (int64, error)
+	// Resident reports what the engine currently holds: engine ref -> bytes.
+	//
+	// Per model, not a total. A total is the wrong question, because the engine
+	// makes room for a new model by evicting an old one — so the figure never
+	// exceeds the card however much is asked of it, and a budget compared
+	// against it never trips. What actually matters is whether the models
+	// coexist.
+	Resident func(context.Context) (map[string]int64, error)
 	// Unload releases one engine reference from card memory.
 	Unload func(context.Context, string) error
 }
@@ -61,6 +68,10 @@ func (p *Proxy) Warm(ctx context.Context, budget *VramBudget) {
 	if budget.enforced() {
 		log.Printf("warm: holding the resident set under %s of VRAM", gib(budget.Bytes))
 	}
+	// Engine refs that are both warmed and still resident. Appended only after
+	// the checks below, so it is the set actually being served.
+	var kept []string
+
 	for _, id := range p.warmOrder() {
 		ref, ok := p.ref(id)
 		if !ok {
@@ -79,25 +90,57 @@ func (p *Proxy) Warm(ctx context.Context, budget *VramBudget) {
 		// 10.2GB in fact. Asking the engine what it is holding is the only
 		// number that is actually true on this card.
 		if budget.enforced() {
-			used, err := budget.Resident(ctx)
-			switch {
-			case err != nil:
+			resident, err := budget.Resident(ctx)
+			if err != nil {
 				// A failed probe is not the model's fault; keep it rather than
 				// punish it for the engine being briefly unreachable.
 				log.Printf("warm: could not read resident VRAM, keeping %s: %v", id, err)
-			case used > budget.Bytes:
-				log.Printf("warm: dropping %s — the resident set would reach %s, past the %s budget",
-					id, gib(used), gib(budget.Bytes))
-				if budget.Unload != nil {
-					if err := budget.Unload(ctx, ref); err != nil {
-						log.Printf("warm: could not unload %s: %v", ref, err)
+			} else {
+				var total int64
+				for _, b := range resident {
+					total += b
+				}
+				// Two ways this model does not belong in the set: the engine
+				// had to evict something to fit it, or the set now exceeds the
+				// budget. The first is the one that matters — it is how a
+				// node ends up advertising models it can only serve by
+				// swapping them on every request, which is slow in a way that
+				// looks like the node being unreliable.
+				var evicted []string
+				for _, prev := range kept {
+					if _, still := resident[prev]; !still {
+						evicted = append(evicted, prev)
 					}
 				}
-				p.drop(id)
-				// Deliberately no break. The order is largest first, so a model
-				// that does not fit says nothing about the smaller ones behind
-				// it — one of those may be exactly what this card can hold.
-				continue
+
+				if len(evicted) > 0 || total > budget.Bytes {
+					if len(evicted) > 0 {
+						log.Printf("warm: dropping %s — loading it evicted %s, so they cannot be served together",
+							id, strings.Join(evicted, ", "))
+					} else {
+						log.Printf("warm: dropping %s — the resident set would reach %s, past the %s budget",
+							id, gib(total), gib(budget.Bytes))
+					}
+					if budget.Unload != nil {
+						if err := budget.Unload(ctx, ref); err != nil {
+							log.Printf("warm: could not unload %s: %v", ref, err)
+						}
+					}
+					p.drop(id)
+
+					// Put back whatever it displaced. Dropping the newcomer
+					// freed the memory again, so these load as they did before.
+					for _, prev := range evicted {
+						if err := p.warmOne(ctx, prev); err != nil {
+							log.Printf("warm: could not restore %s: %v", prev, err)
+						}
+					}
+					// Deliberately no break: the order is smallest first, but a
+					// model that does not fit says nothing conclusive about the
+					// next one, and dropping it has freed the room to try.
+					continue
+				}
+				kept = append(kept, ref)
 			}
 		}
 

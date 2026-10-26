@@ -378,7 +378,7 @@ func (d *Daemon) vramBudget() *inference.VramBudget {
 	ollama := d.models.Ollama
 	return &inference.VramBudget{
 		Bytes:    bytes,
-		Resident: ollama.ResidentBytes,
+		Resident: ollama.ResidentByRef,
 		Unload:   ollama.Unload,
 	}
 }
