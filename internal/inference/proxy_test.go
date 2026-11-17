@@ -130,3 +130,59 @@ func TestChatCompletionsStillRefusesAnUnservedModel(t *testing.T) {
 		t.Errorf("status %d, want 404", rec.Code)
 	}
 }
+
+// Reasoning models think before answering, and through the OpenAI-shaped
+// endpoint that thinking never reaches `content`. Unless told to stop, they
+// spend the whole budget on it and return nothing -- measured at 1,200
+// tokens on a live node. These guard the switch that prevents that.
+
+func TestWithModelSetsReasoningEffort(t *testing.T) {
+	out, err := withModel([]byte(`{"model":"gnodi/x","messages":[]}`), "qwen3.5:9b-q4_K_M")
+	if err != nil {
+		t.Fatalf("withModel: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got["reasoning_effort"] != DefaultReasoningEffort {
+		t.Fatalf("reasoning_effort = %v, want %q", got["reasoning_effort"], DefaultReasoningEffort)
+	}
+	if got["model"] != "qwen3.5:9b-q4_K_M" {
+		t.Fatalf("model = %v, want the engine ref", got["model"])
+	}
+}
+
+// A caller that genuinely wants thinking must still be able to ask for it;
+// the default is a default, not an override.
+func TestWithModelKeepsCallerReasoningEffort(t *testing.T) {
+	out, err := withModel([]byte(`{"model":"gnodi/x","reasoning_effort":"high"}`), "ref")
+	if err != nil {
+		t.Fatalf("withModel: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got["reasoning_effort"] != "high" {
+		t.Fatalf("reasoning_effort = %v, want the caller's \"high\"", got["reasoning_effort"])
+	}
+}
+
+// Everything the daemon has no opinion about must still arrive untouched.
+func TestWithModelLeavesOtherFieldsAlone(t *testing.T) {
+	out, err := withModel([]byte(`{"model":"a","temperature":0.4,"stream":true,"tools":[1,2]}`), "ref")
+	if err != nil {
+		t.Fatalf("withModel: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got["temperature"] != 0.4 || got["stream"] != true {
+		t.Fatalf("caller fields altered: %v", got)
+	}
+	if len(got["tools"].([]any)) != 2 {
+		t.Fatalf("tools altered: %v", got["tools"])
+	}
+}

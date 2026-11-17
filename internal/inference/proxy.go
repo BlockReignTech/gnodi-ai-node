@@ -195,6 +195,35 @@ func writeError(w http.ResponseWriter, code int, msg string) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"message": msg}})
 }
 
+// DefaultReasoningEffort is sent with every request unless the caller asked
+// for something else.
+//
+// Qwen3-era weights think before they answer, and through the OpenAI-shaped
+// endpoint that thinking is not returned in `content` -- it goes to a
+// separate `reasoning` field this daemon does not forward. Left to itself a
+// reasoning model spends the whole completion budget thinking and returns an
+// empty answer: measured on a live node, 1,200 tokens produced nothing at
+// all. The user waits, sees nothing, and is billed for every one of those
+// tokens.
+//
+// "none" is the off switch Ollama honours on that endpoint, and it is safe to
+// send to weights that do not reason -- llama3.1 answers identically with and
+// without it. So it is unconditional rather than a per-model flag: a flag
+// would need setting correctly for every model added from here on, and the
+// cost of forgetting is a model that silently answers nothing.
+//
+// A caller that genuinely wants thinking can still ask: this is only applied
+// when the field is absent.
+const DefaultReasoningEffort = "none"
+
+// withReasoningDefault fills in reasoning_effort when the caller left it out.
+func withReasoningDefault(fields map[string]json.RawMessage) {
+	if _, ok := fields["reasoning_effort"]; ok {
+		return
+	}
+	fields["reasoning_effort"] = json.RawMessage(`"` + DefaultReasoningEffort + `"`)
+}
+
 // withModel replaces the "model" field, leaving every other field byte-exact.
 //
 // Decoded into raw messages rather than a struct so that whatever else the
@@ -210,5 +239,6 @@ func withModel(body []byte, model string) ([]byte, error) {
 		return nil, err
 	}
 	fields["model"] = ref
+	withReasoningDefault(fields)
 	return json.Marshal(fields)
 }

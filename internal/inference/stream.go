@@ -59,11 +59,15 @@ func (p *Proxy) Stream(
 		maxTokens = 512
 	}
 
+	// reasoning_effort: see DefaultReasoningEffort. This is the path every
+	// gateway job takes, so a reasoning model that is not told to stop
+	// thinking returns an empty answer to a paying user.
 	payload, err := json.Marshal(map[string]any{
-		"model":      engineRef,
-		"messages":   messages,
-		"max_tokens": maxTokens,
-		"stream":     true,
+		"model":            engineRef,
+		"messages":         messages,
+		"max_tokens":       maxTokens,
+		"stream":           true,
+		"reasoning_effort": DefaultReasoningEffort,
 	})
 	if err != nil {
 		return out, err
