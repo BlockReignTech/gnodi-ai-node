@@ -1,6 +1,15 @@
 BINARY := gnodi-ai-node
 PKG := ./cmd/gnodi-ai-node
-VERSION ?= dev
+
+# Stamped into the binary so a node reports the release it is actually running
+# rather than whatever its operator typed into NODE_VERSION.
+#
+# Declared once, here. It used to be `VERSION ?= dev` at the top with the
+# git-derived value further down -- and `?=` does not overwrite an already-set
+# variable, so the first one won and every published binary was stamped "dev".
+# v0.3.1 and v0.3.2 both reported it, which left no way to tell from NodeSvc
+# which nodes still needed upgrading.
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w
 
 .PHONY: build test vet build-linux clean run
@@ -26,16 +35,11 @@ clean:
 
 # Release artifacts the installer downloads: static binaries plus the checksum
 # file it verifies against.
-VERSION ?= dev
 # Windows is here because the installer already tells Windows operators to
 # "download the .exe from the releases page" — and until now no .exe was ever
 # built, so that instruction led nowhere. An NVIDIA desktop is the most likely
 # machine an operator actually has.
 PLATFORMS = linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64
-
-# Stamped into the binary so a node reports the release it is actually running
-# rather than whatever its operator typed into NODE_VERSION.
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
 # The pinned key is what stops a compromised gateway telling the fleet which
 # weights to download. Built without it, -X sets the default to the empty string,
@@ -46,6 +50,12 @@ release:
 ifndef MANIFEST_PUBKEY
 	$(error MANIFEST_PUBKEY is required: the base64 Ed25519 key the model catalog \
 	is verified against. Building without it silently disables the manifest.)
+endif
+ifeq ($(VERSION),dev)
+	$(error VERSION resolved to "dev", so this release would ship unable to say \
+	what it is -- which is how v0.3.1 and v0.3.2 both reported "dev" to NodeSvc \
+	and left no way to tell which nodes still needed upgrading. Build from a \
+	checkout with tags (git fetch --tags) or pass VERSION=vX.Y.Z.)
 endif
 	@rm -rf dist && mkdir -p dist
 	@for p in $(PLATFORMS); do \
