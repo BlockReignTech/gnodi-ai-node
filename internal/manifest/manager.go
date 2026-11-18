@@ -28,6 +28,12 @@ type Manager struct {
 type SyncResult struct {
 	Version int
 	Catalog Catalog
+	// ContextTokens is the window the manifest promises per model id.
+	//
+	// Carried so the daemon can check it against what the engine actually
+	// loaded. It went unread for a long time, and the whole fleet quietly
+	// served Ollama's 4096 default while the catalog advertised 32768.
+	ContextTokens map[string]int
 	// Order is Catalog's ids, smallest model first.
 	//
 	// A map has no order, and this one decides which models get the card's
@@ -58,7 +64,7 @@ type SyncResult struct {
 // under the network's model id is exactly the quality drift pinning exists to
 // prevent.
 func (m *Manager) Sync(ctx context.Context) (SyncResult, error) {
-	res := SyncResult{Catalog: Catalog{}, Skipped: map[string]string{}}
+	res := SyncResult{Catalog: Catalog{}, ContextTokens: map[string]int{}, Skipped: map[string]string{}}
 
 	hc := m.HTTP
 	if hc == nil {
@@ -117,6 +123,7 @@ func (m *Manager) Sync(ctx context.Context) (SyncResult, error) {
 			res.Skipped[model.ID] = "digest mismatch"
 		default:
 			res.Catalog[model.ID] = model.Ref
+			res.ContextTokens[model.ID] = model.ContextTokens
 			res.Order = append(res.Order, model.ID)
 		}
 	}

@@ -171,6 +171,40 @@ EOF
   $SUDO systemctl enable --now gnodi-ai-node
   info "service started — journalctl -u gnodi-ai-node -f"
 
+  # --- the engine's context window ----------------------------------------
+  #
+  # Ollama defaults to a 4096-token window, and that default is not something
+  # the daemon can override per model: it proxies to Ollama's
+  # OpenAI-compatible endpoint, which re-applies the server default on every
+  # request and discards whatever window the model was loaded with. One value
+  # for the node, set here, is the only lever there is.
+  #
+  # Left alone it is a silent fault rather than a loud one. The catalog
+  # advertises a larger window, the node serves 4096, and a conversation past
+  # that is truncated from the front -- which the person having it experiences
+  # as the model forgetting what they said, with nothing on screen to explain
+  # it. The daemon logs a "context:" warning at every start while they
+  # disagree.
+  if command -v ollama >/dev/null 2>&1 && [ -f /lib/systemd/system/ollama.service -o -f /etc/systemd/system/ollama.service ]; then
+    OLLAMA_DROPIN=/etc/systemd/system/ollama.service.d/zz-gnodi-context.conf
+    if [ -f "$OLLAMA_DROPIN" ]; then
+      info "ollama context already configured ($OLLAMA_DROPIN)"
+    else
+      $SUDO mkdir -p /etc/systemd/system/ollama.service.d
+      $SUDO sh -c "cat > '$OLLAMA_DROPIN'" <<EOF
+# Written by the Gnodi node installer. Delete this file to go back to
+# Ollama's own default. See "context:" lines in journalctl -u gnodi-ai-node.
+[Service]
+Environment=OLLAMA_CONTEXT_LENGTH=${GNODI_CONTEXT_TOKENS:-16384}
+EOF
+      $SUDO systemctl daemon-reload
+      $SUDO systemctl restart ollama
+      info "ollama context window set to ${GNODI_CONTEXT_TOKENS:-16384} tokens"
+    fi
+  else
+    info "ollama is not a systemd service here — set OLLAMA_CONTEXT_LENGTH=${GNODI_CONTEXT_TOKENS:-16384} yourself"
+  fi
+
 elif [ "$os" = "darwin" ]; then
   PLIST="/Library/LaunchDaemons/tech.blockreign.gnodi-ai-node.plist"
   $SUDO mkdir -p /usr/local/var/gnodi-ai-node /usr/local/var/log

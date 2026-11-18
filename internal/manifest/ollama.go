@@ -114,6 +114,16 @@ func (o *Ollama) Pull(ctx context.Context, ref string, onProgress func(status st
 type Loaded struct {
 	Ref       string
 	VramBytes int64
+	// ContextTokens is the window the engine actually loaded this model with.
+	//
+	// Worth reading because it is not ours to choose per model. The proxy
+	// serves through Ollama's OpenAI-compatible endpoint, which sets the
+	// context on every request from the server's own default and overrides
+	// whatever the model was loaded with — so a model warmed at 32k drops
+	// back to the default the moment a job arrives. The only lever is
+	// OLLAMA_CONTEXT_LENGTH on the engine's service, one value for the whole
+	// node, and this is how we find out what it ended up being.
+	ContextTokens int
 }
 
 // Resident reports what the engine currently holds in card memory.
@@ -138,9 +148,10 @@ func (o *Ollama) Resident(ctx context.Context) ([]Loaded, error) {
 	}
 	var body struct {
 		Models []struct {
-			Name     string `json:"name"`
-			Model    string `json:"model"`
-			SizeVram int64  `json:"size_vram"`
+			Name          string `json:"name"`
+			Model         string `json:"model"`
+			SizeVram      int64  `json:"size_vram"`
+			ContextLength int    `json:"context_length"`
 		} `json:"models"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
@@ -152,7 +163,7 @@ func (o *Ollama) Resident(ctx context.Context) ([]Loaded, error) {
 		if ref == "" {
 			ref = m.Model
 		}
-		out = append(out, Loaded{Ref: ref, VramBytes: m.SizeVram})
+		out = append(out, Loaded{Ref: ref, VramBytes: m.SizeVram, ContextTokens: m.ContextLength})
 	}
 	return out, nil
 }

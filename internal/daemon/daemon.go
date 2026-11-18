@@ -173,6 +173,7 @@ func (d *Daemon) SyncModels(ctx context.Context) error {
 	// rather than fails. Warm measures the resident set as it goes and drops
 	// whatever does not fit beside what is already loaded.
 	d.proxy.Warm(ctx, d.vramBudget())
+	d.checkServedContext(ctx, res)
 
 	d.mu.Lock()
 	d.catalog, d.version = res.Catalog, res.Version
@@ -180,6 +181,58 @@ func (d *Daemon) SyncModels(ctx context.Context) error {
 
 	d.agent.SetModels(d.proxy.Models())
 	return nil
+}
+
+
+// checkServedContext says out loud when the engine serves a smaller context
+// window than the catalog advertises.
+//
+// This exists because the gap went unnoticed for weeks. `contextTokens` was
+// parsed by both manifest schemas and read by neither, no num_ctx reached the
+// engine, and every model on the network served Ollama's 4096 default while
+// the catalog promised 32768 — a conversation past that was silently truncated
+// from the front, which reads to the person having it as the model forgetting
+// what they said.
+//
+// It only warns. The context is not ours to set per model: the proxy serves
+// through Ollama's OpenAI-compatible endpoint, which overrides the loaded
+// window from the engine's own default on every request, so the only lever is
+// OLLAMA_CONTEXT_LENGTH on the engine's service — one value for the node, set
+// by the installer. Refusing to serve would take a node offline over something
+// its operator has to fix on another service; saying so every start is what
+// turns a silent lie into a visible one.
+func (d *Daemon) checkServedContext(ctx context.Context, res manifest.SyncResult) {
+	if d.models == nil || len(res.ContextTokens) == 0 {
+		return
+	}
+	loaded, err := d.models.Ollama.Resident(ctx)
+	if err != nil {
+		log.Printf("context: could not read what the engine loaded: %v", err)
+		return
+	}
+	served := make(map[string]int, len(loaded))
+	for _, l := range loaded {
+		served[l.Ref] = l.ContextTokens
+	}
+	for id, promised := range res.ContextTokens {
+		ref, ok := res.Catalog[id]
+		if !ok {
+			continue
+		}
+		actual, ok := served[ref]
+		if !ok || actual == 0 || promised == 0 {
+			continue // not resident, or the engine did not say
+		}
+		if actual < promised {
+			log.Printf(
+				"context: serving %s at %d tokens but the catalog advertises %d — "+
+					"set OLLAMA_CONTEXT_LENGTH=%d on the ollama service and restart it, "+
+					"or conversations past %d tokens are silently truncated",
+				id, actual, promised, promised, actual)
+			continue
+		}
+		log.Printf("context: %s serving %d tokens", id, actual)
+	}
 }
 
 // Run registers, starts the local status server and the NodeSvc heartbeat, and
