@@ -183,7 +183,6 @@ func (d *Daemon) SyncModels(ctx context.Context) error {
 	return nil
 }
 
-
 // checkServedContext says out loud when the engine serves a smaller context
 // window than the catalog advertises.
 //
